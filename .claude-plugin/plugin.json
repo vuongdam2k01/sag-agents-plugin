@@ -1,0 +1,7 @@
+{
+  "name": "sag-agents",
+  "version": "0.1.0",
+  "description": "SAG knowledge base for Claude Code — reads via SAG's built-in read-only MCP, writes via the sagctl engine + the sagw MCP write server. The agent self-assesses and publishes trustworthy documents on its own, without modifying SAG source code.",
+  "keywords": ["knowledge-base", "sag", "rag", "multi-agent", "mcp"],
+  "homepage": "docs/SPEC.md"
+}

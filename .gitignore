@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# sagctl runtime state (should never live in a repo — see docs/SPEC.md §S1)
+.sagctl/
+sagctl.config.json
+credentials.json
+audit.jsonl
+queue.jsonl
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

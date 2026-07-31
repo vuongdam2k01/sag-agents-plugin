@@ -1,0 +1,31 @@
+{
+  "_comment": "Merge this 'permissions' block into .claude/settings.json (project) or ~/.claude/settings.json (user). Per docs/SPEC.md §S8 — permissions are keyed by MCP TOOL IDENTIFIER (cannot be bypassed via command variants); Bash is only used for the explicit manual path (/sag-publish) and is denied for all dangerous operations.",
+  "permissions": {
+    "allow": [
+      "mcp__sag__*",
+      "mcp__sagw__sag_publish",
+      "mcp__sagw__sag_publish_status",
+      "mcp__sagw__sag_sync_preview",
+      "mcp__sagw__sag_reprocess"
+    ],
+    "ask": [
+      "mcp__sagw__sag_publish_unreviewed",
+      "mcp__sagw__sag_unpublish",
+      "Bash(sagctl publish*)"
+    ],
+    "deny": [
+      "Bash(sagctl unpublish*)",
+      "Bash(sagctl queue*)",
+      "Bash(sagctl api*)",
+      "Bash(sagctl source*)",
+      "Bash(sagctl sync*)",
+      "Bash(sagctl criteria-add*)",
+      "Bash(curl*)",
+      "Bash(wget*)",
+      "Bash(python -c*)",
+      "Bash(python3 -c*)",
+      "Bash(Invoke-WebRequest*)",
+      "Bash(Invoke-RestMethod*)"
+    ]
+  }
+}

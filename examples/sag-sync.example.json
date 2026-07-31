@@ -1,0 +1,19 @@
+{
+  "source_id": "REPLACE_WITH_REAL_SOURCE_ID",
+  "sandbox_source_id": null,
+  "key_format": "flat",
+  "require": "committed",
+  "canonical_branch": "main",
+  "min_confidence": 0.8,
+  "criteria": [
+    {"id": "c1", "text": "Never publish meeting notes or temporary investigation logs"},
+    {"id": "c2", "text": "Always publish every API contract change, even minor ones"}
+  ],
+  "deny_paths": ["docs/pricing/**", "**/*secret*"],
+  "ask_paths": [],
+  "include": ["docs/**/*.md"],
+  "exclude": ["docs/drafts/**"],
+  "max_files": 50,
+  "max_publishes_per_day": 30,
+  "stale_branch_days": 14
+}

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "sag": {
+      "type": "http",
+      "url": "${SAG_URL}/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${SAG_READ_TOKEN}"
+      }
+    },
+    "sagw": {
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/sagw_server.py"],
+      "env": {
+        "SAGCTL_AGENT": "claude-code"
+      }
+    }
+  }
+}

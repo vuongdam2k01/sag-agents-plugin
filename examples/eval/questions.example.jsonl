@@ -1,0 +1,5 @@
+{"question": "Sự cố nào thì dùng runbook mẫu này?", "expected_key": "docs/runbook.md", "strategy": "vector"}
+{"question": "Quyết định gì đã được chốt trong ADR mẫu?", "expected_key": "docs/adr.md", "strategy": "vector"}
+{"question": "Kết luận của research mẫu là gì?", "expected_key": "docs/research.md", "strategy": "vector"}
+{"question": "Các bước xử lý trong runbook mẫu là gì?", "expected_key": "docs/runbook.md", "strategy": "multi"}
+{"question": "Phương án nào đã bị loại trong ADR mẫu và tại sao?", "expected_key": "docs/adr.md", "strategy": "multi"}

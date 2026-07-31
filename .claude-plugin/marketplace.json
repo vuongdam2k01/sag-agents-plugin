@@ -1,0 +1,13 @@
+{
+  "name": "sag-agents-marketplace",
+  "owner": {
+    "name": "sag-agents-plugin"
+  },
+  "plugins": [
+    {
+      "name": "sag-agents",
+      "source": "./",
+      "description": "SAG knowledge base integration — 8 read tools via SAG's built-in MCP, plus 6 write tools (sagw) + the sagctl CLI for publish/unpublish/reprocess/sync/maintain. Does not modify SAG source code — all operations go through the public REST API."
+    }
+  ]
+}

@@ -1,0 +1,340 @@
+# LOCKED SPEC v1 — implementation contract for the sag-agents plugin
+
+> Locked on 2026-07-31 after 2 rounds of two-way exchange with Claude Opus (round 1
+> transcript: `REVIEW-OPUS.md`; round 2: final gate GO-WITH-CONDITIONS → this locked
+> spec). **Any deviation from this spec requires a new decision from the project owner,
+> not an engineer's judgment call.** When this spec conflicts with DESIGN.md /
+> AGENT-BEHAVIOR.md, this spec wins (the other two files were meant to be
+> merged/reconciled in phase P0).
+
+## Selftest results on sag.home (2026-07-31)
+
+Ran `sagctl selftest` + manual verification against a real SAG instance (self-hosted,
+over Tailscale, `base_url = http://sag.home`, self-registered 2 test identities —
+`POST /auth/register` is closed, but `POST /auth/login {name}` self-creates/identifies a
+user). **All 16/16 cases have run — 7/7 BLOCKING PASS.** (S15 initially got stuck because
+the deployment's reverse proxy wasn't forwarding the `/mcp` route to the backend — the
+project owner fixed the proxy, and the retest PASSED.) No unverified assumption remains
+in the original selftest set.
+
+| Case | Result | Consequence |
+|---|---|---|
+| **S1** | **FAIL relative to the old assumption** — sent key `docs/adr/probe.md`, SAG returned `filename=probe.md` (truncated to basename) | **`key_format` default changed from `path` to `flat`** (fixed in `manifest.py`). This is SAG's real behavior, not an assumption. |
+| **S4** | **PASS** — a GET-by-id right at t=0 after DELETE returns 404 immediately (re-confirmed twice with the GET-by-id method, not `search`) | **DELETE is fully synchronous.** `DEFAULT_REPLACE_STRATEGY = "delete_first"` is correct, kept as-is. |
+| **S6** | **PASS** (after fixing a bug in `list_documents_all`) | SAG **completely ignores** `limit`/`offset` on `GET .../documents` — always returns the full list. No real pagination-truncation risk; the bug was in `sagctl`'s own detection heuristic (fixed, see "Self-discovered bugs" below). |
+| **S7** | **PASS** (after switching to checking via `GET .../documents/{id}/parsed` instead of `search`) | Banner + frontmatter survive the parser intact. The superseded strategy (keep the key, insert a banner under every heading) is viable. |
+| **S11** | **FAIL** — identity B immediately sees the source created by identity A | **No isolation between identities.** Matches SAG's own documented warning: "single-user product". |
+| **S12** | Fully answered | `LoginRequest` only needs `name` (email/password optional); the JWT has an `exp`, a fixed **7-day** lifetime; **no logout/revoke/refresh endpoint** (tried `/auth/logout`, `/auth/revoke`, `/auth/refresh` — all 404). A leaked token **cannot be revoked**, only waited out. |
+| **S15** | **PASS** (after the project owner added a `/mcp` route to the reverse proxy — pointing at the same backend as `/api/*`, previously it fell through to the frontend) | A real hand-written MCP client (streamable-http/SSE, no session id) calling `list_documents(source_id)` via the `sag` server — the returned filename matches REST exactly (`rest-mcp-check.md`, the `flat` form confirmed in S1). Path-based citation resolves correctly on both the REST and MCP paths. |
+| **S16** | **PASS** | `grep` matches EXACTLY (`unique_marker_...`) and **is scoped by source**: found in the source containing the content, returns `（未匹配到内容）` (no match) when scoped to a different, empty source. Matches the recommendation in `skills/sag-knowledge/SKILL.md` (use `grep` for exact identifiers, not `search`). |
+
+**Non-blocking cases, also with real results — ALL 16/16 cases have run:**
+- **S2**: every variant (`docs__adr__x.md`, accented Unicode, spaces, `#`) gets truncated
+  to its basename by SAG whenever it contains `/` — consistent with S1. A **`flat`-form
+  key (no `/`) round-trips with perfect fidelity** because there's nothing for SAG to
+  truncate — further confirming `key_format=flat` is the right choice, not just "good
+  enough".
+- **S3**: uploading twice with the same filename → 2 separate documents, SAG does not
+  auto-dedupe (matches the assumption `publish.py` was designed around).
+- **S8**: a file with only frontmatter still ends up with `chunk_count=1` (not 0) — the
+  "ready but empty" condition is rarer than expected for valid text files; the
+  `chunk_count > 0` check is still kept for binary/unparseable cases.
+- **S9**: `document_id` stays the same after `reprocess` — matches the assumption.
+- **S10**: `ingest_text(title=...)` → `filename = "<title>.md"` — quite different from the
+  file-upload path (which takes the filename from the multipart field). Only relevant if
+  `/ingest` is ever used as a publish path in the future (currently `publish_one()` only
+  uses `upload_document`).
+- **S13**: `DocumentOut` **has no owner/created_by/user_id field** — no server-side
+  attribution.
+- **S14**: a 500KB upload succeeded, taking only **0.5s** (well under the
+  `max_upload_mb=25` reported by capabilities) — size is not the bottleneck. Ingestion
+  ended in `failed` after **129.7s** (likely the same LLM rate-limit cause noted under
+  "Operational note" below, not a file-size limit).
+- **Capabilities** (`GET /system/capabilities`, no token needed): `max_upload_mb: 25`,
+  `.md` support along with many other formats, `search_strategy` defaults to `"multi"`.
+
+**Network-resilience bug discovered and fixed while running S14 (not SAG behavior, a
+real vulnerability in `sagctl` itself when the network has transient latency/timeouts —
+observed repeatedly over Tailscale to sag.home, even with plain `curl`, not specific to
+the Python code):** `_request`/`_request_raw_text` in `restclient.py` only caught
+`urllib.error.URLError`, but a timeout occurring MID-response-read (after the connection
+was already established) can surface as a raw `TimeoutError`/`ConnectionError` that
+`urllib` does not wrap — crashing the entire process (`publish --wait`, every polling
+loop in `selftest.py`) over a single transient network blip. Fixed by also catching
+`TimeoutError`/`ConnectionError` and wrapping them consistently as `SagApiError`;
+`publish.py::_wait_for_ready` and the polling loops in `selftest.py` (S4/S7/S8/S9/S14)
+now tolerate network errors (status=0) and keep polling until the deadline instead of
+crashing — real HTTP errors (401/404/...) are still raised immediately as before. Added
+3 regression tests (`tests/test_restclient_network_errors.py`, mocking
+`TimeoutError`/`ConnectionError`).
+
+**MCP `sag` (read) — confirmed with a hand-written client, no SDK used:**
+- Transport: **streamable-http/SSE** (`Content-Type: text/event-stream`), the correct URL
+  form from `GET /sources/{id}/mcp` returns: `http://<host>/mcp/?source_id=<id>`. **No
+  session id needed** — every request is independent on this instance, no need to hold
+  onto an `Mcp-Session-Id` between calls (unlike some other stateful MCP servers — check
+  again if a different instance returns an `Mcp-Session-Id` header, in which case it must
+  be resent on subsequent requests).
+- `tools/list` correctly returns the 8 documented tools: `list_sources, search,
+  get_entity, list_documents, outline, grep, read, get_chunk`. The server identifies
+  itself as `"sag-knowledge"` version `1.29.0`, with `instructions` describing the funnel
+  in Chinese — matching the content already written in `skills/sag-knowledge/SKILL.md`
+  before this test.
+- **`sagw_server.py` (built with the hand-rolled `mcp_protocol.py`) implements plain
+  JSON-RPC over stdio ONLY, NOT streamable-http/SSE** — this is the correct choice since
+  `sagw` runs locally (spawned as a subprocess by the agent tool), no HTTP transport
+  needed; only the `sag` server (SAG's own upstream) uses streamable-http. No changes
+  needed to `sagw`.
+
+**Operational note discovered while testing — not a bug, but worth knowing:**
+Some documents ended up in `status: failed` with the error
+`litellm.RateLimitError: ... Token Plan usage limit reached` — a **quota/credit limit
+on the project owner's LLM provider account (MiniMax-M3)**, not a SAG or plugin bug.
+Important: the document still has `chunk_count=1` and **basic `grep`/`search` still
+finds the content** despite `status=failed` — meaning chunking/embedding (no LLM needed)
+had already completed before the event/entity-extraction step (LLM-dependent) failed.
+`publish.py` treats `status=="ready"` as a STRICT success condition (no leniency for
+`failed` even with chunks present) — this is the right choice, kept as-is: trust the
+final status SAG itself reports, and `sag-maintain`/`sagctl reprocess` is already the
+recovery path for `failed` documents. **Running the selftest (especially S6 — uploading
+120 documents) consumes real LLM quota on the project owner's infrastructure** — consider
+lowering `n` in `case_s6_pagination` if rerunning it repeatedly on the same
+tightly-limited LLM account.
+
+**Conclusion for S23/token model (DESIGN.md, REVIEW-OPUS F23):** S11 (no isolation) + S13
+(no server-side attribution) + unstable `login` behavior when identifying by name
+(observed: calling with the same `{name}` repeatedly did not always return the same user
+id during the test session) → **per-agent identity is officially dropped** from the
+design, no longer "conditional". Use the S12 model exactly (split read/write token, no
+per-agent distinction) — see S12 below.
+
+**Self-discovered bugs fixed while running the selftest (not SAG behavior):**
+1. `list_documents_all` misread "the server ignores limit" as "the server truncates
+   pages" when `len(page) == page_size` due to a boundary coincidence — fixed by directly
+   detecting `len(first) > page_size` (direct evidence the server ignores the limit)
+   before suspecting truncation.
+2. `maintain.py` (`dedupe_source`, `find_stale_branch`) assumed `get_document()` returned
+   a `content`/`text` field — **wrong**, `DocumentOut` has no such field (confirmed via
+   S13). Must call `GET .../documents/{id}/parsed` separately (added a
+   `get_document_parsed` method, returning plain text rather than JSON — also required
+   adding a separate `_request_raw_text`, since `_request`'s default `json.loads` would
+   crash on this endpoint).
+3. `case_s4`/`case_s7` in `selftest.py` originally used `search` to check whether content
+   existed — **unreliable**: search is semantic/vector-based and can fail to match a
+   meaningless marker string even when the content genuinely exists (directly observed:
+   the pre-delete search in S4 also missed it). Switched to GET-by-id (S4) and
+   `GET .../parsed` (S7) — unambiguous binary evidence, independent of search quality.
+
+## S0. Architecture
+
+A single engine `scripts/sagctl.py` (Python 3.11+, stdlib-only). Three consumption
+surfaces:
+- MCP `sag` — SAG's own upstream, 8 read tools, read token, allow-all. Does not touch
+  SAG's source.
+- MCP `sagw` — the plugin's thin server wrapping the engine, 6 tools, talking to SAG
+  purely over REST.
+- CLI — everything else (sync, maintain, queue, source, selftest, eval, doctor, adapter).
+
+G1 standard (same OS user): protects against accidents + shallow injection, **not** a
+security boundary. G2 hardened (separate OS user, service): an optional later addition.
+
+## S1. Configuration source
+
+Manifest `.sag-sync.json` **in the repo, must be an ancestor of the commit being
+published**:
+
+```json
+{
+  "source_id": "...", "sandbox_source_id": "...",
+  "key_format": "path | flat",
+  "require": "committed",              // committed (default) | pushed | merged
+  "canonical_branch": "main",
+  "min_confidence": 0.8,
+  "criteria": [ {"id": "c1", "text": "Do not include meeting notes"} ],
+  "deny_paths": ["docs/pricing/**"],
+  "ask_paths": [],
+  "include": ["**/*.md"], "exclude": [],
+  "max_files": 50, "max_publishes_per_day": 30, "stale_branch_days": 14
+}
+```
+
+- Precedence: `deny_paths > ask_paths > include/exclude > criteria > confidence`.
+- `deny_paths` blocks **manual mode too** (a rule the user themselves wrote); `ask_paths`
+  can be satisfied by manual mode.
+- `criteria` = natural language for the model's judgment; `deny/ask_paths` = deterministic
+  rules for the engine. Editing criteria/deny/ask = a separate commit + separate audit
+  entry + ask permission.
+- Config/audit/queue/cost-counter: `~/.sagctl/<sha256(source_id)[:12]>/`. The engine
+  **aborts** if it finds `sagctl.config.json|queue.jsonl|audit.jsonl` in the repo (the
+  manifest itself belongs in the repo).
+
+## S2. Identity & hashing
+
+- Key = POSIX relpath, encoded per `key_format` — **LOCKED: `flat` is the default**
+  (selftest S1 on sag.home confirmed SAG truncates the multipart filename to its
+  basename, so `path` is not viable as the default; `path` is still kept as an option for
+  other SAG instances with different behavior — always verify with
+  `sagctl selftest --case S1` before provisioning a new source); `__` is forbidden in the
+  relpath when using `flat`.
+- After every upload: assert `response.filename == key`; on mismatch ⇒ abort with
+  `KEY_FORMAT_DRIFT`.
+- Hash/dedupe/content-change detection: **`git hash-object` on the original file** (before
+  provenance is inserted).
+- Durable citation = `source + key(+heading)`; `document_id/chunk_id` are ephemeral.
+
+## S3. Provenance
+
+Inserted **only into the upload bytes**, never modifying the file on disk: `sag_key,
+sag_source_commit, sag_source_blob, sag_published_at, sag_status, sag_route`. Merged
+into existing YAML frontmatter if the file already has one (never creating a second
+`---` block). Every SAG↔repo comparison strips provenance first.
+
+## S4. Deterministic floor (before every upload, no LLM)
+
+```text
+manifest ancestor is resolvable
+∧ path matches include ∧ does not match exclude ∧ does not match deny_paths
+∧ git state satisfies require (default: clean porcelain status + has a commit)
+∧ secret scan passes (regex + entropy; gitleaks if present on PATH)
+∧ dedupe-by-key ∧ cost cap not exceeded
+```
+
+If any clause is red ⇒ the engine deterministically rejects. `sag_publish_unreviewed`
+bypasses `require` but **does not** bypass the secret scan / `deny_paths`.
+
+## S5. Assessment (the contract for the `sag_publish` tool + CLI `--assessment`)
+
+Mandatory, typed; missing/wrong type ⇒ fails validation at the MCP layer:
+
+```text
+schema_version, path, source_id, commit, assessed_at,
+initiator      ← filled in by the ENGINE: agent-auto | user-manual | queue-approved
+trigger        : post-write-hook | end-of-task | user-command | maintenance
+agent          : claude-code | hermes:<profile> | codex
+verdict        : knowledge | not-knowledge | unsure
+durable{pass,why}, audience{pass,why}, retrieval_fit{pass,why},
+criteria_ack[id], confidence, rationale
+```
+
+- `canonical`/`secret_free` are **not** declared by the model — that's the engine floor's
+  job.
+- The engine fills in `key`, `initiator`, `criteria_available` itself.
+- The full record is written to the audit JSONL; the frontmatter only receives the
+  minimal provenance (S3).
+
+## S6. Routing (`verdict` first, `confidence` second)
+
+```text
+knowledge ∧ conf ≥ min_confidence ∧ (no criteria ∨ criteria_ack ≠ ∅) → AUTO publish
+knowledge ∧ conf < threshold | unsure | criteria_ack empty when criteria exist
+  | ask_paths matched                                                   → QUEUE
+not-knowledge                                                           → do not publish
+deny_paths matched                                                      → reject, manual mode included
+manual mode (valid token)                                               → skip assessment, S4 still runs
+```
+
+`criteria_ack` has teeth: if the manifest has criteria but the ack is empty ∧ verdict is
+knowledge ⇒ no auto-publish, push to queue (guards against assessment running when the
+criteria have fallen out of context).
+
+## S7. Manual mode
+
+- MCP has **no** manual flag. `sag_publish` always requires an assessment.
+- The only manual path: slash command `/sag-publish <path|glob>` → the `UserPromptSubmit`
+  hook **only mints a token when the prompt matches that command's exact form**, the
+  token is bound to `sha256(args)`, single-use (the engine unlinks it upon consumption) +
+  5-minute TTL, stored at `~/.sagctl/session/`. `initiator: user-manual` is a
+  **conclusion the engine draws from the token**, never a field the model sends.
+- Hermes/Codex: a human types the CLI command outside the agent session.
+
+## S8. Tools & permissions (keyed by MCP tool identifier)
+
+- **allow**: `mcp__sag__*` · `mcp__sagw__sag_publish{path, assessment}` ·
+  `sag_publish_status{key?}` · `sag_sync_preview{}` · `sag_reprocess{key}`
+- **ask**: `sag_publish_unreviewed{path, reason}` (keeps the same key, only changes
+  `sag_status`, creates a reconcile debt) · `sag_unpublish{key, reason}` ·
+  `Bash(sagctl publish*)`
+- **deny**: `Bash(sagctl unpublish*|queue*|api*|source*|sync*)` ·
+  `curl|wget|python -c|Invoke-WebRequest`
+  (note: deny beats allow in Claude Code ⇒ `publish` is set to ask, not deny, so the
+  slash command still works; the real gate is the engine-side token)
+- **Ops config**: default = `read, publish, replace, reprocess, unpublish`
+  (unpublish is in the default set because it's the remediation path, already ask-gated);
+  must be enabled explicitly = `queue-review, sync, source-admin, api`.
+  `replace` is internal to the engine (only removes a document that duplicates the exact
+  key being uploaded), separate from `delete`.
+
+## S9. Publish semantics
+
+- `publish_one()` is shared by both single-document publish and batch sync.
+- **Non-blocking by default**; `--wait` is opt-in, ≤90s, timeout ⇒ exit 75 (tempfail).
+- Success = `ready ∧ chunk_count > 0`.
+- Replace ordering: **LOCKED to `delete_first`** — selftest S4 on sag.home confirmed
+  DELETE is fully synchronous (a GET-by-id returns 404 immediately at t=0).
+  `upload_then_delete` is still available in the code
+  (`SAGCTL_REPLACE_STRATEGY=upload_then_delete`) for other SAG instances if their
+  selftest gives a different result.
+- Tolerates 404 on delete. Sync additionally: detects renames via blob sha, `max_files`,
+  a concurrency cap.
+
+## S10. Maintain / post-hoc review
+
+- Default is to **propose**, never auto-delete. The one exception: a duplicate key with
+  determinable ancestry ⇒ automatically remove the losing copy. Tie-break: `git cat-file
+  -e` first → `is-ancestor` → if both are ancestors ⇒ the smaller `rev-list --count` wins
+  → UNKNOWN ⇒ delete nothing, report to a human; fetch failure ⇒ report only.
+- "Orphan" is defined relative to the **Git HEAD** of the mapped repo, not the lock file.
+- Stale-branch (guards against squash/rebase erasing the SHA): `is-ancestor(commit)`
+  **OR** (`path` exists at `origin/<canonical_branch>` ∧ its blob matches
+  `sag_source_blob`); if both are false for longer than `stale_branch_days` ⇒ flag,
+  propose unpublish.
+- Self-gate post-hoc review + fail-rate by `agent × route` ⇒ `sagctl doctor`. Action
+  (lowering the threshold/revoking privileges) is a human decision in phase 1.
+
+## S11. Awareness-nudge layer
+
+- **Primary**: the `Stop` + `SessionEnd` hooks — scan `git diff --name-only` since the
+  start of the session ∩ include-globs, cross-check against the audit log, list files not
+  yet assessed. Notify-only, checks `stop_hook_active` (guards against loops).
+- **Secondary**: `PostToolUse(Write|Edit)` gives a gentle nudge, deduped once per
+  file/session.
+- **Hermes/Codex**: advisory (profile system prompt / AGENTS.md) + `sagctl doctor
+  --unassessed`. Stated honestly: machine-enforcement only exists on Claude Code.
+
+## S12. Token
+
+Read/write are split. The agent only holds the read token (`.mcp.json` uses
+`SAG_READ_TOKEN`). The write token is read from `~/.sagctl/` by `sagw`/the CLI.
+
+**Per-agent identity: LOCKED — dropped entirely**, no longer "conditional". Selftest S11
+(sag.home) confirmed there is no isolation between identities (user B immediately sees
+user A's source); S13 confirmed there is no server-side attribution (`DocumentOut` has no
+owner/user_id field). A second identity/token buys neither isolation nor attribution —
+it only adds credential-management overhead. Use **exactly one read/write token pair for
+the entire agent fleet** of a project; attribution only exists at the `audit.py` layer
+(local, unauthenticated — good enough for internal forensics, not enough to stop an
+agent deliberately lying about `agent`/`initiator`).
+
+**Token lifecycle (S12 on sag.home)**: `LoginRequest` only needs `name`; the JWT has a
+fixed **7-day** lifetime, no logout/revoke/refresh endpoint. A leaked token **cannot be
+revoked early** — the direct consequence: write the token to exactly one place
+(`~/.sagctl/credentials.json`, `0600` permissions), and treat rotation as re-login +
+manual redistribution on a cycle shorter than 7 days for sensitive environments.
+
+---
+
+## Phase plan
+
+| Phase | Content | Depends on |
+|---|---|---|
+| **P0** | Reconcile the docs: merge DESIGN+AGENT-BEHAVIOR into a complete SPEC, apply the [fix-docs] conditions | blocks everything |
+| **P0b** | Skeleton (parallel with P1, no server needed): repo structure + `sagw/` + `hooks/` + `commands/`, manifest parser+validator, JSON Schema assessment, audit writer + cost counter, `~/.sagctl/` layout, secret scan, provenance injector, git-blob hash + `--dry-run` planner, adapter/doc templates. 3 isolated functions waiting on the selftest: `encode_key()`, `replace_strategy()`, `list_all_documents()`. DoD: py_compile, every `--help`, dry-run gives the same plan on Windows/Linux, offline policy test, assessment-validation test | P0 |
+| **P1** | ✅ **COMPLETED on sag.home (2026-07-31) — 16/16 cases, 7/7 BLOCKING PASS.** S1 flat, S4 delete_first, S6 no-truncation after fixing the bug, S7 banner survives, S11 no isolation, S12 7-day non-revocable token, S15+S16 PASS via a real MCP client. While running it, 2 additional network-resilience bugs (uncaught timeout/connection errors) were discovered and fixed. See "Selftest results" at the top of the file. | P0 |
+| **P2** | Engine publish path: `publish_one()` (manifest ancestor → S4 floor → key+assertion → dedupe → replace → upload with provenance → non-blocking), `unpublish`, `reprocess`, `publish-status` | P1 (S1/S4/S6/S15) |
+| **P3** | Consumption surfaces: `sagw` 6 tools + schema validation; the 3 adapter permission sets; the Stop/SessionEnd/PostToolUse/UserPromptSubmit hooks; the `/sag-publish` slash command. Bypass test: manual mode without a token ⇒ rejected; a token for path A cannot be used for path B | P2 |
+| **P4** | Queue (`list\|approve\|reject`, `queue-review` op), ancestry-based dedupe, HEAD-based orphan detection, stale-branch, self-gate post-hoc review, `doctor` | P2, S7 |
+| **P5** | Batch sync (using `publish_one()`, rename via blob, max_files, concurrency) + `eval --save-baseline` | P2 |
+| **P6** | Write the selftest results back into SPEC, pin the SAG version | P1 |
+
+Critical path: **P0 → P1(S4) → P2 → P3**. P0b runs in parallel from day one; P4/P5 don't
+block each other.
