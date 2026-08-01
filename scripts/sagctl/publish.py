@@ -198,6 +198,9 @@ def publish_one(
             trigger=trigger,
             agent=agent,
             key=key,
+            path=relpath,
+            source_id=source_id,
+            commit=commit,
             criteria_available=[c["id"] for c in m.get("criteria", [])],
         )
 
@@ -369,6 +372,9 @@ def publish_content(
             trigger=trigger,
             agent=agent,
             key=key,
+            path=relpath,
+            source_id=source_id,
+            commit=None,
             criteria_available=[c["id"] for c in m.get("criteria", [])],
         )
 

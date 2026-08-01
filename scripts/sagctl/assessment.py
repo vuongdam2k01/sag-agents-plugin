@@ -7,9 +7,20 @@ used as input to routing (S6) and to later post-hoc review (S10) re-scoring.
 the deterministic floor (gate.py), not the model's judgment (REVIEW-OPUS gate
 turn2 D5: don't let the model "self-report" work that belongs to the machine).
 
-`initiator`, `key`, `criteria_available` are filled in by the ENGINE, never
-taken from the model — this is where the "model self-reports that the user
-gave the order" loophole is blocked (REVIEW-OPUS §2c).
+`initiator`, `key`, `criteria_available`, `path`, `source_id`, `commit` are all
+filled in by the ENGINE, never taken from the model. `initiator`/`key`/
+`criteria_available` block the "model self-reports that the user gave the
+order" loophole (REVIEW-OPUS §2c). `path`/`source_id`/`commit` are here for a
+narrower, purely practical reason (found live, 2026-08-01): the engine already
+computes authoritative values for all three — `path` is the tool call's own
+argument, `source_id` comes from the resolved manifest, `commit` from
+`gitutil.last_commit_touching()` — so nothing the model supplies for them is
+ever consulted. Requiring them from the model anyway was pure friction with no
+functional benefit: a real agent submitted a schema-valid assessment (the
+MCP tool's own schema never declared these three as model-supplied fields),
+got rejected by this validator for "missing required field: path", and had to
+improvise a `git rev-parse HEAD` call just to satisfy a check whose answer the
+engine already had.
 """
 from __future__ import annotations
 
@@ -24,9 +35,6 @@ VALID_INITIATORS = {"agent-auto", "user-manual", "queue-approved"}
 VALID_TRIGGERS = {"post-write-hook", "end-of-task", "user-command", "maintenance"}
 
 _REQUIRED_TOP = (
-    "path",
-    "source_id",
-    "commit",
     "verdict",
     "durable",
     "audience",
@@ -77,9 +85,17 @@ def enrich(
     trigger: str,
     agent: str,
     key: str,
+    path: str,
+    source_id: str,
+    commit: str | None,
     criteria_available: list[str],
 ) -> dict:
-    """Engine fills in the fields the model is not allowed to self-report, returns the complete assessment."""
+    """Engine fills in the fields the model is not allowed to self-report, returns
+    the complete assessment. `path`/`source_id`/`commit` are set from the engine's
+    own authoritative values, overwriting anything the model may have supplied —
+    same principle as `initiator`/`key`, just for fields that happen to have a
+    trustworthy answer already available rather than a security-sensitive one.
+    """
     if initiator not in VALID_INITIATORS:
         raise AssessmentError(f"invalid initiator: {initiator}")
     if trigger not in VALID_TRIGGERS:
@@ -91,6 +107,9 @@ def enrich(
     out["trigger"] = trigger
     out["agent"] = agent
     out["key"] = key
+    out["path"] = path
+    out["source_id"] = source_id
+    out["commit"] = commit
     out["criteria_available"] = criteria_available
     out.setdefault("criteria_ack", [])
     return out

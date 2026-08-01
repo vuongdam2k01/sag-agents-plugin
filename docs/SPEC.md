@@ -211,21 +211,32 @@ where a repo exists above the manifest; outside one it is inapplicable, not skip
 
 ## S5. Assessment (the contract for the `sag_publish` tool + CLI `--assessment`)
 
-Mandatory, typed; missing/wrong type ⇒ fails validation at the MCP layer:
+The model supplies exactly these fields, mandatory and typed; missing/wrong type ⇒ fails
+validation at the MCP layer:
 
 ```text
-schema_version, path, source_id, commit, assessed_at,
-initiator      ← filled in by the ENGINE: agent-auto | user-manual | queue-approved
-trigger        : post-write-hook | end-of-task | user-command | maintenance
-agent          : claude-code | hermes:<profile> | codex
 verdict        : knowledge | not-knowledge | unsure
 durable{pass,why}, audience{pass,why}, retrieval_fit{pass,why},
 criteria_ack[id], confidence, rationale
 ```
 
+Everything else in the full record is filled in by the **ENGINE**, never taken from the
+model — `schema_version, path, source_id, commit, assessed_at, key, criteria_available`,
+plus `initiator` (agent-auto | user-manual | queue-approved), `trigger`
+(post-write-hook | end-of-task | user-command | maintenance), `agent`
+(claude-code | hermes:\<profile\> | codex).
+
 - `canonical`/`secret_free` are **not** declared by the model — that's the engine floor's
   job.
-- The engine fills in `key`, `initiator`, `criteria_available` itself.
+- `path`/`source_id`/`commit` were briefly required from the model too (a drafting error,
+  not the intent) — the MCP tool's own schema never actually offered them as properties,
+  and the engine already has authoritative values for all three (the tool call's `path`
+  argument, the resolved manifest, `gitutil`), so nothing a model supplied for them was
+  ever read. A real agent hit exactly this mismatch live (2026-08-01): a schema-valid
+  assessment got rejected for "missing required field: path", forcing an unnecessary
+  `git rev-parse HEAD` to satisfy a check whose answer the engine already had. Fixed by
+  dropping them from `_REQUIRED_TOP` and having `enrich()` set them from the engine's own
+  values, overwriting anything the model provides — same treatment as `key`/`initiator`.
 - The full record is written to the audit JSONL; the frontmatter only receives the
   minimal provenance (S3).
 
