@@ -27,7 +27,7 @@ Agent**, and **Codex**, and gives your agents:
 - **Read** — SAG's own upstream MCP server (`sag`), untouched, 8 tools.
 - **Write** — a local MCP server (`sagw`, 6 tools) plus a CLI (`sagctl`), both backed by
   one engine that talks to SAG exclusively through its **public REST API**.
-- **Judgment** — 5 skills that teach the agent *when* a document is durable, shared
+- **Judgment** — 7 skills that teach the agent *when* a document is durable, shared
   knowledge worth publishing, and a typed self-assessment contract it must fill in before
   anything is written.
 - **A safety floor** — a deterministic, LLM-free set of checks (git state, path
@@ -43,7 +43,7 @@ Agent**, and **Codex**, and gives your agents:
 Every operation goes over SAG's documented REST API and its built-in MCP server. You can
 upgrade SAG, or point the plugin at somebody else's SAG instance, without a fork, a patch
 queue, or a migration. The trade-off is that the plugin has to discover SAG's real
-behavior empirically — which is exactly what `sagctl selftest` does (16 probe cases,
+behavior empirically — which is exactly what `sagctl selftest` does (17 probe cases,
 results recorded in [docs/SPEC.md](docs/SPEC.md)).
 
 ---
@@ -106,6 +106,13 @@ tokens**, and the write token never enters the agent's environment.
 
 ## Quick start
 
+Install the plugin, then run `/sag-setup` and answer its questions — it probes your SAG
+instance, mints the tokens, scaffolds the manifest, and wires this agent tool up. It has
+two modes: **bootstrap** a new scope, or **join** one another agent already created (you
+supply the `source_id`).
+
+The manual equivalent, if you prefer to drive it yourself:
+
 ```bash
 git clone https://github.com/vuongdam2k01/sag-agents-plugin.git
 cd sag-agents-plugin
@@ -116,8 +123,8 @@ python scripts/install-shim.py
 # 2. Authenticate — stores a write token at ~/.sagctl/credentials.json (0600)
 sagctl login --url http://<sag-host>:8000 --name <your-name>
 
-# 3. Verify the plugin's assumptions hold on *your* SAG instance
-sagctl selftest --url http://<sag-host>:8000 --token <token>
+# 3. Measure YOUR instance — key_format is a probe result, not a constant
+sagctl setup probe --url http://<sag-host>:8000 --token <token>
 
 # 4. Create a source and wire up a project
 sagctl source create "my-project-knowledge"
@@ -154,7 +161,7 @@ The **write token is deliberately not in the agent's environment** — it lives 
 [Security model](#security-model).
 
 The plugin registers both MCP servers ([.mcp.json](.mcp.json)), four hooks
-([hooks/hooks.json](hooks/hooks.json)), the `/sag-publish` slash command, and 5 skills.
+([hooks/hooks.json](hooks/hooks.json)), the `/sag-publish` slash command, and 7 skills.
 Generate the project-scoped MCP config and the permission block from inside the repo:
 
 ```bash
@@ -474,8 +481,10 @@ shell history and the process list. It is only ever read from `~/.sagctl/`.
 | [sag-maintain](skills/sag-maintain/SKILL.md) | yes | Health checks: failed documents, orphans, duplicates, self-gate review. Proposes, never destroys. |
 | [sag-sync-project](skills/sag-sync-project/SKILL.md) | **no** | Batch sync an entire repo. Human-triggered only. |
 | [sag-source-admin](skills/sag-source-admin/SKILL.md) | **no** | Create/update/delete a source. Destructive, human-triggered only. |
+| [sag-status](skills/sag-status/SKILL.md) | yes | Read-only diagnostics: which scope, shared state or not, read url scoped or not, unassessed files. |
+| [sag-setup](skills/sag-setup/SKILL.md) | **no** | First-run setup on this machine — bootstrap a new scope or join an existing one. Human-triggered only. |
 
-The two destructive skills set `disable-model-invocation: true` — a request like "clean up
+The three privileged skills set `disable-model-invocation: true` — a request like "clean up
 the knowledge base" does not grant permission to run them.
 
 ### Awareness layer
@@ -573,7 +582,7 @@ defaults.
 scripts/sagctl/      the engine — write logic, safety floor, routing, audit
 scripts/sagw_server.py   thin MCP write server wrapping the engine (6 tools)
 scripts/install-shim.py  puts `sagctl` on PATH, creates ~/.sagctl/
-skills/              5 skills teaching correct knowledge-base use
+skills/              7 skills: setup, status, and correct knowledge-base use
 commands/            /sag-publish slash command
 hooks/               awareness nudges + manual token minting
 adapters/            per-agent-tool installation config (claude-code, hermes, codex)

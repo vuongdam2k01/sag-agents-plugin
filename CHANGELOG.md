@@ -62,6 +62,33 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
     an unverified mitigation.
   - 13 new tests covering url derivation, merge-target marking, agent identity tagging,
     and that no write token ever appears in a generated config (S12).
+- **Onboarding skills — `/sag-setup` and `sag-status`.** Setup is order-dependent and has
+  a verification gate that documentation alone does not enforce.
+  - `sag-setup` (`disable-model-invocation: true`, human-triggered only) branches into
+    **bootstrap** (provision a new scope) or **join** (attach to a scope another agent or
+    host already created — the user supplies a `source_id`, nothing is created, and the
+    skill checks that `key_format` matches the existing manifest).
+  - It **scaffolds** a manifest once and never edits policy afterwards: `deny_paths`,
+    `ask_paths`, and `criteria` are left empty for the user to fill in a separate reviewed
+    commit, per S1. This is the deliberate divergence from Honcho's `/honcho:config`
+    interactive editor — here the config is policy in Git, not host preference.
+  - `sag-status` is read-only diagnostics over `sagctl doctor`: which scope, whether state
+    is shared with other hosts, whether the read url is scoped, which committed files were
+    never assessed.
+- `sagctl setup probe --url --token [--full]` — measures an instance and reports the
+  manifest defaults *it* implies. `key_format` is a probe result (S1), not a constant: S2
+  locks `flat` on the strength of one instance and says to re-verify before provisioning a
+  new source. Skipping that check fails silently — keys stop matching,
+  `find_existing_by_key` never finds the previous document, and every publish adds a
+  duplicate instead of replacing. `--full` also measures S4 (replace strategy) and S17
+  (MCP read scoping); without it both are reported as unmeasured rather than assumed.
+- `sagctl login --print-token` — prints the token instead of saving it, for minting the
+  read token into `SAG_READ_TOKEN`. The write token remains the only thing written to
+  `~/.sagctl/credentials.json` (S12). Documented honestly: SAG's JWT has no role or scope,
+  so this split limits the blast radius of an agent-side leak, not what a leaked token can
+  do.
+- `SagClient.capabilities()` — `GET /system/capabilities`, used by `setup probe` to
+  describe an instance before anything is provisioned against it.
 - `adapters/claude-code/README.md` and `adapters/hermes/README.md`, so all three adapter
   directories document the generator rather than shipping snippets to copy.
 - Open-source project scaffolding: `LICENSE` (MIT), `CONTRIBUTING.md`,
