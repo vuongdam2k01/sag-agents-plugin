@@ -1,0 +1,100 @@
+name: Bug report
+description: Something in the plugin behaves differently from what the spec says
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please **redact tokens, hostnames, and document contents**
+        from anything you paste below.
+
+        If this is a security vulnerability, do not file it here — see
+        [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what actually happened instead.
+      placeholder: |
+        Expected: `sagctl publish docs/adr/0007.md` to be rejected because the file
+        matches `deny_paths`.
+        Actual: it published.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command or MCP tool call, and the relevant part of your manifest.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface
+      options:
+        - CLI (sagctl)
+        - MCP write server (sagw)
+        - MCP read server (sag)
+        - Hook
+        - Skill / slash command
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent-host
+    attributes:
+      label: Agent host
+      options:
+        - Claude Code
+        - Hermes Agent
+        - Codex
+        - None — plain CLI
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version / commit
+      placeholder: "0.1.0 or c3cb7f7"
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Python version and OS
+      placeholder: "Python 3.11.15 · Windows 10 / Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dry-run
+    attributes:
+      label: Does it reproduce with --dry-run?
+      options:
+        - "Yes"
+        - "No"
+        - "Not applicable"
+    validations:
+      required: true
+
+  - type: input
+    id: spec-section
+    attributes:
+      label: Related spec section (if you know it)
+      description: docs/SPEC.md section — S1 manifest, S4 floor, S6 routing, S7 manual mode, S9 publish, S12 tokens…
+      placeholder: "S4"
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output / logs
+      description: Redacted. If the bug looks like it is SAG's behavior rather than the plugin's, include the matching `sagctl selftest --case <ID>` output.
+      render: shell

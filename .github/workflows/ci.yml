@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python-version }} · ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # sagctl is stdlib-only by design (see CONTRIBUTING.md) — there is
+      # deliberately no dependency installation step here.
+      - name: Byte-compile every module
+        run: python -m compileall -q scripts hooks tests
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+  no-dependencies:
+    name: stdlib-only check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Fail if a dependency manifest appears
+        shell: bash
+        run: |
+          found=$(ls requirements*.txt pyproject.toml setup.py setup.cfg Pipfile poetry.lock 2>/dev/null || true)
+          if [ -n "$found" ]; then
+            echo "::error::sagctl must stay stdlib-only, but found: $found"
+            exit 1
+          fi
+          echo "No dependency manifest present."
+
+  manifests:
+    name: JSON manifests are valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate every tracked JSON file parses
+        shell: bash
+        run: |
+          set -e
+          git ls-files '*.json' | while read -r f; do
+            python -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8'))" "$f"
+            echo "ok  $f"
+          done
+
+      - name: Validate the plugin manifest has the required fields
+        run: |
+          python - <<'PY'
+          import json, sys
+          m = json.load(open('.claude-plugin/plugin.json', encoding='utf-8'))
+          missing = [k for k in ('name', 'version', 'description') if not m.get(k)]
+          if missing:
+              sys.exit(f"plugin.json is missing required field(s): {missing}")
+          print(f"plugin.json ok — {m['name']} v{m['version']}")
+          PY

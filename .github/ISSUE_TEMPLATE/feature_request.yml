@@ -1,0 +1,61 @@
+name: Feature request
+description: Propose a capability the plugin does not have yet
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two constraints shape every feature here (see
+        [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)):
+
+        1. It must not require modifying SAG's source code.
+        2. It must not add a runtime dependency outside the Python standard library.
+
+        A proposal that needs either isn't rejected outright — it just means the design
+        conversation happens before the code.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you solving
+      description: Describe the situation, not the solution. What goes wrong today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like to happen
+      description: How would this work from the user's or the agent's side?
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: How would you know it works
+      description: What would you test, and what result would mean it's solved?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: This can be built without modifying SAG's source code.
+        - label: This can be built with the Python standard library only.
+        - label: This is consistent with docs/SPEC.md (if not, say which section it changes below).
+
+  - type: input
+    id: spec-section
+    attributes:
+      label: Spec section this would change
+      description: Leave blank if it changes nothing. Otherwise name the section — a spec change is an explicit decision, made before the PR.
+      placeholder: "S6 routing"
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including doing nothing, or handling it outside the plugin.

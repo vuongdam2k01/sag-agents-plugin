@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/vuongdam2k01/sag-agents-plugin/security/advisories/new
+    about: Report privately. Please do not open a public issue — read SECURITY.md first for what is in and out of scope.
+  - name: SAG behaves unexpectedly (not this plugin)
+    url: https://github.com/Zleap-AI/SAG/issues
+    about: SAG is a separate project. If `sagctl selftest --case <ID>` shows SAG itself diverging from the spec's assumptions, report it there — and please link the issue back here.
+  - name: The spec, and why things are the way they are
+    url: https://github.com/vuongdam2k01/sag-agents-plugin/blob/main/docs/SPEC.md
+    about: docs/SPEC.md is canonical, and records the real selftest results behind each locked default.
