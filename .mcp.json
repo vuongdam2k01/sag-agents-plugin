@@ -8,8 +8,8 @@
       }
     },
     "sagw": {
-      "command": "python",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/sagw_server.py"],
+      "command": "sagctl",
+      "args": ["serve-mcp"],
       "env": {
         "SAGCTL_AGENT": "claude-code",
         "SAGCTL_STATE_URL": "${SAGCTL_STATE_URL}",

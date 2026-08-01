@@ -118,7 +118,8 @@ git clone https://github.com/vuongdam2k01/sag-agents-plugin.git
 cd sag-agents-plugin
 
 # 1. Install the engine (puts `sagctl` on PATH, creates ~/.sagctl/)
-python scripts/install-shim.py
+#    Use python3 or python — whichever your OS actually has.
+python3 scripts/install-shim.py
 
 # 2. Authenticate — stores a write token at ~/.sagctl/credentials.json (0600)
 sagctl login --url http://<sag-host>:8000 --name <your-name>
@@ -190,8 +191,14 @@ version marker so drift is detectable. See [adapters/codex/](adapters/codex/).
 
 ### The engine (required for all three)
 
+On Claude Code the plugin already ships the engine — run `/sag-install-engine` instead of
+cloning. Elsewhere, from a checkout:
+
 ```bash
-python scripts/install-shim.py
+python3 scripts/install-shim.py
+```
+
+```bash
 sagctl login --url <SAG_URL> --name <name>
 ```
 

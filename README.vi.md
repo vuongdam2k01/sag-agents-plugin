@@ -118,7 +118,8 @@ git clone https://github.com/vuongdam2k01/sag-agents-plugin.git
 cd sag-agents-plugin
 
 # 1. Cài engine (đặt `sagctl` lên PATH, tạo ~/.sagctl/)
-python scripts/install-shim.py
+#    Dùng python3 hoặc python — tuỳ máy bạn có cái nào.
+python3 scripts/install-shim.py
 
 # 2. Đăng nhập — lưu write token tại ~/.sagctl/credentials.json (quyền 0600)
 sagctl login --url http://<sag-host>:8000 --name <tên-của-bạn>
@@ -190,8 +191,14 @@ version marker để phát hiện lệch phiên bản. Xem [adapters/codex/](ada
 
 ### Engine (bắt buộc cho cả ba tool)
 
+Trên Claude Code plugin đã mang sẵn engine — gõ `/sag-install-engine` thay vì clone. Nơi
+khác thì từ một checkout:
+
 ```bash
-python scripts/install-shim.py
+python3 scripts/install-shim.py
+```
+
+```bash
 sagctl login --url <SAG_URL> --name <tên>
 ```
 

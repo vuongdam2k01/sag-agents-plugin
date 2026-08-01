@@ -43,11 +43,27 @@ Everything else is derived — never ask for it:
 
 ## Step 1 — engine (both modes)
 
-```bash
-python scripts/install-shim.py
+On Claude Code the plugin already contains the engine — do not clone the repo, that only
+makes a second copy `claude plugin update` does not manage. Use the slash command:
+
+```
+/sag-install-engine
 ```
 
-Then follow its PATH instructions. It deliberately does not edit PATH itself.
+On Hermes or Codex there is no plugin manager, so a checkout is required; run
+`install-shim.py` from it. **Do not type `python`** — a stock Ubuntu has only `python3`,
+and the python.org installer on Windows has only `python`. Use whichever exists.
+
+Then follow the PATH instructions it prints. It deliberately does not edit PATH itself.
+
+Two things to surface if they appear in the output:
+
+- A **WARNING about a version-pinned plugin cache** — the shim would keep running the old
+  engine after `claude plugin update`, silently. Re-run from the marketplace checkout the
+  warning points at.
+- `sagctl version` failing in a new shell — the shim exists, PATH just has not been
+  applied. Everything else in the plugin depends on this one thing being on PATH: `sagw`
+  and all four hooks invoke `sagctl`, not an interpreter.
 
 ## Step 2 — probe the instance (both modes)
 
