@@ -511,10 +511,14 @@ def cmd_adapter_emit(args):
     for f in files:
         dest = dest_root / f.path
         # A file that normally already holds unrelated content (settings.json,
-        # config.yaml) is never written blind — clobbering a user's editor settings
-        # is not this command's job.
-        if f.merge and not args.force:
-            skipped.append((dest, "merge-target: print and merge by hand, or pass --force"))
+        # config.yaml, config.toml) is NEVER written by this command — no flag
+        # overrides this. --force was previously allowed to bypass it and did
+        # exactly what the comment above always said not to do: silently replaced
+        # a real settings.json full of unrelated configuration, with no backup,
+        # because --force also governed "already exists" for our own artifacts.
+        # Those are two different risk classes and must not share one flag.
+        if f.merge:
+            skipped.append((dest, "merge-target: this command never writes it — print and merge by hand"))
             continue
         if dest.exists() and not args.force:
             skipped.append((dest, "already exists: pass --force to overwrite"))
@@ -719,7 +723,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--plugin-root", default="/opt/agent-skills/sag-agents-plugin",
                     help="path to the plugin checkout on the target host (hermes/codex)")
     sp.add_argument("--write", default=None, metavar="DIR", help="write the generated files under DIR")
-    sp.add_argument("--force", action="store_true", help="with --write: overwrite existing / merge-target files")
+    sp.add_argument(
+        "--force", action="store_true",
+        help="with --write: overwrite an existing file THIS COMMAND generated before "
+        "(e.g. .mcp.json). Never overwrites a merge-target (settings.json/config.yaml/"
+        "config.toml) — those are always printed for you to merge by hand, no exceptions.",
+    )
     sp.add_argument("--out", default=None, help="write the whole rendering to one file")
     sp.set_defaults(func=cmd_adapter_emit)
 

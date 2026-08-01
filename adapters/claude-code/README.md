@@ -6,9 +6,14 @@ Generate the config from inside the repo you are wiring up:
 sagctl adapter-emit claude-code --write .
 ```
 
-That writes `.mcp.json` (wholly ours, so it is written directly) and prints the
-`.claude/settings.json` permission block for you to merge — settings.json normally
-holds unrelated editor configuration and is never clobbered without `--force`.
+That writes `.mcp.json` (wholly ours, so it is written directly, `--force` to overwrite a
+previous version) and prints the `.claude/settings.json` permission block for you to merge
+by hand. **This command never writes `settings.json` itself, with or without `--force`** —
+a real settings.json typically holds a lot of unrelated configuration (permissions, hooks,
+env), and there is no safe way to merge into it automatically. (An earlier version let
+`--force` overwrite it directly; that was a bug, not a feature — it clobbered a real
+settings.json in the field with no backup. Fixed: `--force` now only ever applies to files
+this command generated itself.)
 
 `source_id` is read from the repo's `.sag-sync.json`, so the emitted read MCP url is
 scoped to the project the agent works in (`${SAG_URL}/mcp/?source_id=<id>`) and the id
