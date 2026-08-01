@@ -62,6 +62,30 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
     an unverified mitigation.
   - 13 new tests covering url derivation, merge-target marking, agent identity tagging,
     and that no write token ever appears in a generated config (S12).
+- **Fixed: the plugin assumed a command named `python` existed.** Confirmed broken on a
+  stock Ubuntu 24.04 (2026-08-01), which ships `python3` and no `python`: `sagw` never
+  started and all four hooks died — the hooks *silently*, so the agent kept working and
+  simply never reported an unassessed file. There is no interpreter name that is correct
+  everywhere (python.org on Windows ships only `python`), so no static config can name one.
+  - New `sagctl serve-mcp` and `sagctl hook <name>`. `.mcp.json`, `hooks.json`, and every
+    config `adapter-emit` generates now invoke `sagctl`, whose shim has `sys.executable`
+    baked in at install time. One thing has to be on PATH instead of three, and a missing
+    `sagctl` fails loudly rather than silently.
+  - `commands/sag-install-engine.md` — installs the engine from the plugin's own copy via
+    `${CLAUDE_PLUGIN_ROOT}`. Telling Claude Code users to clone the repo was only ever a
+    workaround for having no way to find that path, and the clone is a second copy
+    `claude plugin update` does not manage.
+  - `install-shim.py` warns when run from a **version-pinned plugin cache**
+    (`~/.claude/plugins/cache/<marketplace>/<plugin>/0.1.0/` — the real layout, read off a
+    live install) and points at the stable `marketplaces/` checkout. A shim baked against a
+    versioned path keeps running the old engine after an upgrade without a word. It now
+    also prints the engine path and interpreter it resolved.
+  - New `sagctl version` reports version, engine path, and interpreter — how that drift
+    gets noticed.
+  - `plugin_root` is no longer needed for Codex at all; for Hermes it only points at
+    `skills/`.
+  - 11 new tests, including a guard that no shipped or generated config may name an
+    interpreter in a `command` position.
 - **S17 measured on a live instance (2026-08-01, `sag.home`).** `?source_id=` **is**
   enforced by the server for document access — a client scoped to source B cannot reach
   source A's documents. `list_sources` however still returns every source on the instance,
