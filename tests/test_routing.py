@@ -60,6 +60,28 @@ class TestRouting(unittest.TestCase):
         d = routing.decide(relpath="docs/x.md", manifest=m, assessment=a, manual_token_valid=False)
         self.assertEqual(d.route, routing.Route.AUTO)
 
+    def test_criteria_ack_with_fabricated_ids_queues_not_autos(self):
+        """'criteria_ack has teeth' means real ids, not merely a non-empty list.
+        Found by review, 2026-08-01: the previous check only tested `not ack`, so
+        any non-empty criteria_ack passed regardless of whether its ids existed
+        anywhere in the manifest — an agent (or a bug) could fabricate an id and
+        sail straight to AUTO."""
+        m = base_manifest(criteria=[{"id": "c1", "text": "no meeting notes"}], min_confidence=0.8)
+        a = {"verdict": "knowledge", "confidence": 0.95, "criteria_ack": ["totally-made-up-id"]}
+        d = routing.decide(relpath="docs/x.md", manifest=m, assessment=a, manual_token_valid=False)
+        self.assertEqual(d.route, routing.Route.QUEUE)
+
+    def test_criteria_ack_with_one_real_and_one_fake_id_still_autos(self):
+        """Partial-but-real coverage is enough — the check is "did you engage with
+        the real criteria at all", not "did you enumerate every single one"."""
+        m = base_manifest(
+            criteria=[{"id": "c1", "text": "no meeting notes"}, {"id": "c2", "text": "no PII"}],
+            min_confidence=0.8,
+        )
+        a = {"verdict": "knowledge", "confidence": 0.95, "criteria_ack": ["c1", "unknown-id"]}
+        d = routing.decide(relpath="docs/x.md", manifest=m, assessment=a, manual_token_valid=False)
+        self.assertEqual(d.route, routing.Route.AUTO)
+
     def test_confidence_below_threshold_queues(self):
         m = base_manifest(min_confidence=0.8)
         a = {"verdict": "knowledge", "confidence": 0.5}
