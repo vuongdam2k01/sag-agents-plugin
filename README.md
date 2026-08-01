@@ -155,18 +155,27 @@ The **write token is deliberately not in the agent's environment** — it lives 
 
 The plugin registers both MCP servers ([.mcp.json](.mcp.json)), four hooks
 ([hooks/hooks.json](hooks/hooks.json)), the `/sag-publish` slash command, and 5 skills.
-Recommended permission rules are in
-[adapters/claude-code/settings-rules.json](adapters/claude-code/settings-rules.json).
+Generate the project-scoped MCP config and the permission block from inside the repo:
+
+```bash
+sagctl adapter-emit claude-code --write .
+```
+
+See [adapters/claude-code/](adapters/claude-code/).
 
 ### Hermes Agent
 
-Point `skills.external_dirs` at this repo's `skills/` directory — see
-[adapters/hermes/config.example.yaml](adapters/hermes/config.example.yaml).
+```bash
+sagctl adapter-emit hermes --plugin-root /opt/agent-skills/sag-agents-plugin
+```
+
+Emits `mcp_servers`, `skills.external_dirs`, and the per-role profile split. See
+[adapters/hermes/](adapters/hermes/).
 
 ### Codex
 
 ```bash
-sagctl adapter-emit codex
+sagctl adapter-emit codex --plugin-root /opt/agent-skills/sag-agents-plugin
 ```
 
 This prints the config block for `config.toml` and the `AGENTS.md` section, each with a
@@ -225,9 +234,105 @@ Each repo that publishes to SAG carries a `.sag-sync.json` at a directory that i
 
 Runtime state (config, audit log, queue, cost counters) lives under
 `~/.sagctl/<sha256(source_id)[:12]>/` — **never in the repo**. The engine aborts if it
-finds `sagctl.config.json`, `audit.jsonl`, or `queue.jsonl` inside a working tree.
+finds `sagctl.config.json`, `audit.jsonl`, or `queue.jsonl` inside a working tree. When
+agents run on more than one machine, point them all at a shared state service instead —
+see [Running agents on several machines](#running-agents-on-several-machines).
 
 Start from [examples/sag-sync.example.json](examples/sag-sync.example.json).
+
+---
+
+## Running agents on several machines
+
+A scope is a `source_id`, not a folder. Any number of agents, on any number of machines,
+in any number of repos, share a scope by declaring the same `source_id` in their
+`.sag-sync.json`. Publishing stays correct with no coordination at all: `publish_one()`
+never trusts local state — it lists documents by key on SAG and replaces, so SAG is the
+inventory and two hosts converge on their own.
+
+Three things do **not** converge on their own, because they are per-host files:
+
+| | Consequence on N hosts |
+|---|---|
+| `cost.json` | `max_publishes_per_day` becomes N × the manifest value |
+| `queue.jsonl` | an item queued on host A cannot be approved from host B |
+| `audit.jsonl` | `doctor` and post-hoc review each see 1/N of the history |
+
+Run the state service once, anywhere the fleet can reach:
+
+```bash
+SAGSTATE_TOKEN=<shared-secret> python scripts/sagstate_server.py --host 0.0.0.0 --port 9000
+```
+
+Then on every agent host:
+
+```bash
+export SAGCTL_STATE_URL="http://<state-host>:9000"
+```
+
+```bash
+export SAGCTL_STATE_TOKEN="<shared-secret>"
+```
+
+That is the whole configuration — one cost cap, one queue, one audit log for the fleet.
+Leave both unset and the engine keeps the local files exactly as before; there is no
+migration step and no behaviour change for a single-machine setup.
+
+Verify it took effect:
+
+```bash
+sagctl doctor
+```
+
+The `state` block reports `backend: http` and whether the service is reachable. If one
+host reports `local` while another reports `http`, they are **not** sharing state — even
+though both publish into the same SAG source.
+
+The service is dumb storage and holds no policy: the manifest still decides what may be
+published, the deterministic floor still runs on the agent host. Compromising it lets an
+attacker forge audit history and reset the cost counter, not publish something the floor
+would have rejected. See [SPEC amendment A1](docs/SPEC.md#a1-state-location-is-pluggable--local-default--http-fleet-shared).
+
+### Generating each host's config
+
+`source_id` is declared once — in the manifest, in Git. Every agent-side config is
+generated from it, so nothing is hand-copied between machines. Run this in the repo, on
+the host being set up:
+
+```bash
+sagctl adapter-emit claude-code --write .
+```
+
+For the other targets:
+
+```bash
+sagctl adapter-emit hermes --plugin-root /opt/agent-skills/sag-agents-plugin
+```
+
+```bash
+sagctl adapter-emit codex --plugin-root /opt/agent-skills/sag-agents-plugin
+```
+
+The generated read MCP url carries the scope — `${SAG_URL}/mcp/?source_id=<id>` — so an
+agent working in project A does not casually retrieve project B's knowledge. Without a
+resolvable manifest the command still emits, but prints a warning and marks the config
+unscoped: that has to be a visible choice, not a silent default.
+
+Files that normally already hold unrelated content (`settings.json`, `config.yaml`,
+`config.toml`) are printed for you to merge rather than written over. Only `.mcp.json`,
+which is wholly ours, is written directly.
+
+**What the scoping is worth:** defence in depth, not a boundary. SAG has no isolation
+between identities (selftest S11) and the fleet shares one read token, so the same token
+still reaches an unscoped URL. It stops casual cross-project retrieval, not a determined
+one. Selftest case `S17` measures this on your own instance rather than taking it on
+trust — run it before relying on the claim:
+
+```bash
+sagctl selftest --url http://<sag-host>:8000 --token <token> --case S17
+```
+
+See [SPEC amendment A2](docs/SPEC.md#a2-agent-side-config-is-generated-from-the-manifest-read-mcp-is-scoped).
 
 ---
 

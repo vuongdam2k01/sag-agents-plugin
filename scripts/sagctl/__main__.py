@@ -223,7 +223,9 @@ def cmd_maintain_review_self_gate(args):
 
 
 def cmd_doctor(args):
-    out = {}
+    # Always reported: "is this host sharing state with the rest of the fleet?"
+    # is a host-level question and must not require a --source-id to answer.
+    out = {"state": doctor.state_report()}
     if args.manifest:
         out["unassessed_files"] = doctor.unassessed_files(Path(args.manifest))
     if args.source_id:
@@ -288,15 +290,77 @@ def cmd_api(args):
     return 0
 
 
+def _resolve_source_id(args) -> str | None:
+    """source_id is declared once, in the manifest, in Git — never typed into an
+    agent-side config by hand. --source-id is the escape hatch for emitting a config
+    from outside any repo."""
+    if getattr(args, "no_scope", False):
+        return None
+    if getattr(args, "source_id", None):
+        return args.source_id
+    try:
+        if getattr(args, "manifest", None):
+            m = manifest_mod.load(Path(args.manifest))
+        else:
+            m = manifest_mod.load_for(Path.cwd())
+        return m["source_id"]
+    except manifest_mod.ManifestError:
+        return None
+
+
 def cmd_adapter_emit(args):
     from . import adapters_emit
 
-    text = adapters_emit.emit(args.target)
-    if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
-        print(f"wrote {args.out}")
-    else:
-        print(text)
+    source_id = _resolve_source_id(args)
+    if source_id is None and not args.no_scope:
+        print(
+            "WARNING: no manifest found and no --source-id given — emitting an UNSCOPED "
+            "read MCP url. This agent will be able to list and search EVERY source on the "
+            "SAG instance, not just its own (SAG has no isolation between identities, "
+            "selftest S11). Run from a directory with a .sag-sync.json, or pass --source-id.",
+            file=sys.stderr,
+        )
+
+    files = adapters_emit.emit_files(
+        args.target, source_id=source_id, plugin_root=args.plugin_root
+    )
+
+    if not args.write:
+        if args.out:  # kept for compatibility with the previous single-file behaviour
+            Path(args.out).write_text(adapters_emit.emit(
+                args.target, source_id=source_id, plugin_root=args.plugin_root), encoding="utf-8")
+            print(f"wrote {args.out}")
+        else:
+            print(adapters_emit.emit(
+                args.target, source_id=source_id, plugin_root=args.plugin_root))
+        return 0
+
+    dest_root = Path(args.write)
+    written, skipped = [], []
+    for f in files:
+        dest = dest_root / f.path
+        # A file that normally already holds unrelated content (settings.json,
+        # config.yaml) is never written blind — clobbering a user's editor settings
+        # is not this command's job.
+        if f.merge and not args.force:
+            skipped.append((dest, "merge-target: print and merge by hand, or pass --force"))
+            continue
+        if dest.exists() and not args.force:
+            skipped.append((dest, "already exists: pass --force to overwrite"))
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f.content, encoding="utf-8")
+        written.append(dest)
+
+    for d in written:
+        print(f"wrote {d}")
+    for d, why in skipped:
+        print(f"skipped {d} — {why}", file=sys.stderr)
+    if skipped:
+        print("\n--- content of the skipped files ---\n", file=sys.stderr)
+        for f in files:
+            if any(str(dest_root / f.path) == str(d) for d, _ in skipped):
+                print(f"# ===== {f.path} =====\n{f.content}", file=sys.stderr)
     return 0
 
 
@@ -414,9 +478,23 @@ def build_parser() -> argparse.ArgumentParser:
     add_profile(sp)
     sp.set_defaults(func=cmd_api)
 
-    sp = sub.add_parser("adapter-emit")
+    sp = sub.add_parser(
+        "adapter-emit",
+        help="generate agent-tool config from the manifest (read MCP scoped to source_id)",
+    )
     sp.add_argument("target", choices=["claude-code", "hermes", "codex"])
-    sp.add_argument("--out", default=None)
+    sp.add_argument("--manifest", default=None, help="manifest to read source_id from (default: found from cwd)")
+    sp.add_argument("--source-id", default=None, help="override source_id (use outside a repo)")
+    sp.add_argument(
+        "--no-scope",
+        action="store_true",
+        help="emit an unscoped read MCP url — the agent can read every source on the instance",
+    )
+    sp.add_argument("--plugin-root", default="/opt/agent-skills/sag-agents-plugin",
+                    help="path to the plugin checkout on the target host (hermes/codex)")
+    sp.add_argument("--write", default=None, metavar="DIR", help="write the generated files under DIR")
+    sp.add_argument("--force", action="store_true", help="with --write: overwrite existing / merge-target files")
+    sp.add_argument("--out", default=None, help="write the whole rendering to one file")
     sp.set_defaults(func=cmd_adapter_emit)
 
     return p

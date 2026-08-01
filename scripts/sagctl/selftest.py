@@ -1,6 +1,8 @@
-"""16 verification cases against a real SAG instance (SPEC Phase P1). 7 BLOCKING
+"""17 verification cases against a real SAG instance (SPEC Phase P1). 7 BLOCKING
 cases (S1, S4, S6, S7, S11, S12, S15) must run and produce results before the
-default assumptions in publish.py/keys.py/restclient.py can be trusted. Run:
+default assumptions in publish.py/keys.py/restclient.py can be trusted. S17 (read
+scoping, added with SPEC amendment A2) is non-blocking but decides whether
+`adapter-emit`'s scoped url may be described as read separation at all. Run:
 
     sagctl selftest --url http://sag-host:8000 --token <TOKEN> [--case S1,S4,...]
 
@@ -366,6 +368,74 @@ def case_s16_grep_exact_scoped(client: SagClient) -> CaseResult:
     )
 
 
+def case_s17_mcp_read_scoping(client: SagClient, *, ready_timeout: float = 300.0) -> CaseResult:
+    """Does `?source_id=<id>` on the read MCP url actually narrow what an agent sees?
+
+    `sagctl adapter-emit` generates that URL to keep an agent working in project A
+    from casually retrieving project B's knowledge. S11 proved SAG has no isolation
+    between identities, so URL scoping is the ONLY read-side separation available —
+    which makes it worth measuring rather than assuming.
+
+    Automated, using the hand-rolled MCP client (no SDK). Two temporary sources; a
+    marker document in A only; then list_documents through a client scoped to B.
+    """
+    from .mcp_client import McpClientError, McpHttpClient, scoped_url
+
+    marker = f"unique_marker_s17_{int(time.time())}"
+    source_a = _mk_source(client, "sagctl-selftest-s17-a")
+    source_b = _mk_source(client, "sagctl-selftest-s17-b")
+    try:
+        doc = client.upload_document(source_a, "s17-scoping-probe.md", f"{marker}\n".encode("utf-8"))
+        _poll_status(client, source_a, doc["id"], timeout=ready_timeout)
+
+        try:
+            mcp_a = McpHttpClient(scoped_url(client.base_url, source_a), client.token)
+            mcp_a.initialize()
+            docs_a = mcp_a.call_tool("list_documents", {"source_id": source_a})
+
+            mcp_b = McpHttpClient(scoped_url(client.base_url, source_b), client.token)
+            mcp_b.initialize()
+            # Deliberately ask B's scoped endpoint for A's documents. If the query
+            # param is only a default and not a boundary, A's content comes back.
+            docs_b_crossing = mcp_b.call_tool("list_documents", {"source_id": source_a})
+            sources_seen_from_a = mcp_a.call_tool("list_sources", {})
+        except McpClientError as e:
+            return CaseResult(
+                "S17", False, None,
+                f"MCP call failed: {e}. If this is HTTP 404, the deployment's reverse proxy is "
+                f"probably not forwarding /mcp to the backend — the same problem S15 hit; fix the "
+                f"proxy and rerun. Read scoping is UNVERIFIED until this case passes.",
+            )
+
+        probe_visible_in_a = "s17-scoping-probe.md" in docs_a
+        probe_leaked_into_b = "s17-scoping-probe.md" in docs_b_crossing
+        b_sees_other_sources = source_a in sources_seen_from_a
+
+        if not probe_visible_in_a:
+            return CaseResult(
+                "S17", False, False,
+                f"the scoped client for source A could not see its OWN document — "
+                f"list_documents returned: {docs_a[:300]}",
+                "adapter-emit's scoped url is wrong for this instance; check the form returned by "
+                "GET /sources/{id}/mcp and correct mcp_client.scoped_url().",
+            )
+
+        return CaseResult(
+            "S17", False, not probe_leaked_into_b,
+            f"probe visible via source-A-scoped url: {probe_visible_in_a}; "
+            f"A's document reachable through the source-B-scoped url: {probe_leaked_into_b}; "
+            f"list_sources through the scoped url still shows other sources: {b_sees_other_sources}.",
+            "leak=False -> `adapter-emit` scoping is real defence in depth, keep it on. "
+            "leak=True -> ?source_id= is only a default, NOT a boundary: stop describing it as "
+            "read isolation in README/SPEC and treat cross-project read separation as unsolved. "
+            "b_sees_other_sources=True -> an agent can still enumerate other projects' sources "
+            "even when scoped; worth noting even if the leak check passes.",
+        )
+    finally:
+        _cleanup_source(client, source_a)
+        _cleanup_source(client, source_b)
+
+
 ALL_CASES = {
     "S1": case_s1_filename_roundtrip,
     "S2": case_s2_key_roundtrip_variants,
@@ -381,6 +451,7 @@ ALL_CASES = {
     "S14": case_s14_limits,
     "S15": case_s15_rest_mcp_consistency,
     "S16": case_s16_grep_exact_scoped,
+    "S17": case_s17_mcp_read_scoping,
 }
 NEEDS_SECOND_IDENTITY = {"S11": case_s11_multi_identity, "S13": case_s13_server_attribution}
 

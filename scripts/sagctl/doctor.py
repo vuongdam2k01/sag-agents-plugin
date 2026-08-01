@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import audit, gitutil, globmatch, manifest as manifest_mod, manual
+from . import audit, gitutil, globmatch, manifest as manifest_mod, manual, state
 
 
 def unassessed_files(manifest_path: Path, *, since_ref: str | None = None) -> list[str]:
@@ -45,6 +45,32 @@ def unassessed_files(manifest_path: Path, *, since_ref: str | None = None) -> li
     return sorted(unassessed)
 
 
+def state_report() -> dict:
+    """Which state backend this host is actually using.
+
+    On a multi-host fleet this is the first thing to check: if one host reports
+    `local` and another reports `http`, they are NOT sharing the cost cap, the
+    queue, or the audit log — regardless of both pointing at the same SAG source.
+    """
+    backend = state.get_backend()
+    report = {"backend": backend.name}
+    if backend.name == "http":
+        report["url"] = backend.base_url
+        report["authenticated"] = bool(backend.token)
+        try:
+            backend.audit_read("sagctl-doctor-probe")
+            report["reachable"] = True
+        except state.StateError as e:
+            report["reachable"] = False
+            report["error"] = str(e)
+    else:
+        report["note"] = (
+            "state is local to this host — cost cap, queue and audit are NOT shared "
+            "with other agent hosts. Set SAGCTL_STATE_URL to share them."
+        )
+    return report
+
+
 def health_report(source_id: str) -> dict:
     tokens_cleaned = manual.cleanup_expired()
     fail_rates = audit.fail_rate_by_agent_route(source_id)
@@ -55,6 +81,7 @@ def health_report(source_id: str) -> dict:
         events_today[ev] = events_today.get(ev, 0) + 1
     return {
         "source_id": source_id,
+        "state": state_report(),
         "expired_manual_tokens_cleaned": tokens_cleaned,
         "fail_rate_by_agent_route": fail_rates,
         "events_last_24h": events_today,

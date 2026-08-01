@@ -1,16 +1,18 @@
-"""Audit log + cost/rate counters — lives at ~/.sagctl/, outside the write reach
-of the agent in the workspace (SPEC S1/S4). This is the evidence for post-hoc
-review (S10) and the place where R3's (DESIGN.md) "attribution" actually means
-something, since the agent inside the repo cannot write/modify it.
+"""Audit log + cost/rate counters — outside the write reach of the agent in the
+workspace (SPEC S1/S4). This is the evidence for post-hoc review (S10) and the
+place where R3's (DESIGN.md) "attribution" actually means something, since the
+agent inside the repo cannot write/modify it.
+
+WHERE it lives is decided by `state.py` (SPEC S1 amendment A1): the local
+`~/.sagctl/` files by default, or one fleet-shared state service when
+`SAGCTL_STATE_URL` is set. This module holds the SEMANTICS (what an audit record
+is, what the cap means); it no longer holds the storage.
 """
 from __future__ import annotations
 
-import json
-import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from . import config
+from . import state
 
 
 def _now_iso() -> str:
@@ -18,26 +20,11 @@ def _now_iso() -> str:
 
 
 def append(source_id: str, event: dict) -> None:
-    record = {"ts": _now_iso(), **event}
-    path = config.audit_path(source_id)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    state.audit_append(source_id, {"ts": _now_iso(), **event})
 
 
 def read_all(source_id: str) -> list[dict]:
-    path = config.audit_path(source_id)
-    if not path.exists():
-        return []
-    out = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return state.audit_read(source_id)
 
 
 def read_since(source_id: str, days: int) -> list[dict]:
@@ -56,30 +43,20 @@ def read_since(source_id: str, days: int) -> list[dict]:
 # -- cost / rate cap --------------------------------------------------------
 
 
-def _load_cost(source_id: str) -> dict:
-    path = config.cost_path(source_id)
-    if not path.exists():
-        return {"day": _today(), "publishes": 0, "per_key": {}}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {"day": _today(), "publishes": 0, "per_key": {}}
-
-
-def _save_cost(source_id: str, data: dict) -> None:
-    config.cost_path(source_id).write_text(json.dumps(data), encoding="utf-8")
-
-
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return state.today_utc()
 
 
 def check_cost_cap(source_id: str, manifest: dict, key: str) -> tuple[bool, str]:
-    """Check WITHOUT recording — used in gate.py before the actual upload runs."""
-    data = _load_cost(source_id)
-    if data["day"] != _today():
+    """Check WITHOUT recording — used in gate.py before the actual upload runs.
+
+    With the shared backend this cap becomes what the manifest always claimed it
+    was: one budget for the whole fleet, not one per host.
+    """
+    data = state.cost_get(source_id)
+    if data.get("day") != _today():
         return True, ""
-    if data["publishes"] >= manifest.get("max_publishes_per_day", 30):
+    if data.get("publishes", 0) >= manifest.get("max_publishes_per_day", 30):
         return False, f"exceeds max_publishes_per_day={manifest.get('max_publishes_per_day')}"
     per_key_count = data.get("per_key", {}).get(key, 0)
     if per_key_count >= 5:
@@ -88,13 +65,7 @@ def check_cost_cap(source_id: str, manifest: dict, key: str) -> tuple[bool, str]
 
 
 def bump_cost_counter(source_id: str, key: str) -> None:
-    data = _load_cost(source_id)
-    if data["day"] != _today():
-        data = {"day": _today(), "publishes": 0, "per_key": {}}
-    data["publishes"] += 1
-    data.setdefault("per_key", {})
-    data["per_key"][key] = data["per_key"].get(key, 0) + 1
-    _save_cost(source_id, data)
+    state.cost_bump(source_id, key)
 
 
 def fail_rate_by_agent_route(source_id: str, *, days: int = 30) -> dict:

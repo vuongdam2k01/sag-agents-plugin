@@ -154,19 +154,28 @@ export SAG_READ_TOKEN="<token chỉ đọc>"
 [Mô hình bảo mật](#mô-hình-bảo-mật).
 
 Plugin đăng ký cả hai MCP server ([.mcp.json](.mcp.json)), bốn hook
-([hooks/hooks.json](hooks/hooks.json)), slash command `/sag-publish`, và 5 skill. Bộ
-permission khuyến nghị nằm ở
-[adapters/claude-code/settings-rules.json](adapters/claude-code/settings-rules.json).
+([hooks/hooks.json](hooks/hooks.json)), slash command `/sag-publish`, và 5 skill. Sinh
+cấu hình MCP có scope theo project cùng khối permission, chạy ngay trong repo:
+
+```bash
+sagctl adapter-emit claude-code --write .
+```
+
+Xem [adapters/claude-code/](adapters/claude-code/).
 
 ### Hermes Agent
 
-Trỏ `skills.external_dirs` vào thư mục `skills/` của repo này — xem
-[adapters/hermes/config.example.yaml](adapters/hermes/config.example.yaml).
+```bash
+sagctl adapter-emit hermes --plugin-root /opt/agent-skills/sag-agents-plugin
+```
+
+Sinh ra `mcp_servers`, `skills.external_dirs`, và phần chia profile theo vai trò. Xem
+[adapters/hermes/](adapters/hermes/).
 
 ### Codex
 
 ```bash
-sagctl adapter-emit codex
+sagctl adapter-emit codex --plugin-root /opt/agent-skills/sag-agents-plugin
 ```
 
 Lệnh này in ra khối cấu hình cho `config.toml` và phần cho `AGENTS.md`, mỗi khối có một
@@ -226,8 +235,103 @@ tiên (ancestor) của commit đang được publish**:
 Trạng thái runtime (config, audit log, queue, bộ đếm chi phí) nằm dưới
 `~/.sagctl/<sha256(source_id)[:12]>/` — **không bao giờ trong repo**. Engine sẽ abort nếu
 phát hiện `sagctl.config.json`, `audit.jsonl`, hay `queue.jsonl` bên trong working tree.
+Khi các agent chạy trên nhiều máy, hãy trỏ tất cả về một state service dùng chung — xem
+[Chạy agent trên nhiều máy](#chạy-agent-trên-nhiều-máy).
 
 Bắt đầu từ [examples/sag-sync.example.json](examples/sag-sync.example.json).
+
+---
+
+## Chạy agent trên nhiều máy
+
+Scope là một `source_id`, không phải một thư mục. Bao nhiêu agent, trên bao nhiêu máy,
+trong bao nhiêu repo cũng được — chúng dùng chung một scope bằng cách khai cùng
+`source_id` trong `.sag-sync.json` của mình. Việc publish vẫn đúng mà không cần phối hợp
+gì: `publish_one()` không bao giờ tin state cục bộ — nó luôn liệt kê document theo key
+trên SAG rồi mới replace, nên SAG giữ inventory và các máy tự hội tụ.
+
+Ba thứ **không** tự hội tụ, vì chúng là file cục bộ của từng máy:
+
+| | Hệ quả trên N máy |
+|---|---|
+| `cost.json` | `max_publishes_per_day` thành N × giá trị trong manifest |
+| `queue.jsonl` | item vào queue ở máy A không thể duyệt từ máy B |
+| `audit.jsonl` | `doctor` và post-hoc review mỗi máy chỉ thấy 1/N lịch sử |
+
+Chạy state service một lần, ở nơi cả fleet truy cập được:
+
+```bash
+SAGSTATE_TOKEN=<shared-secret> python scripts/sagstate_server.py --host 0.0.0.0 --port 9000
+```
+
+Rồi trên mỗi máy chạy agent:
+
+```bash
+export SAGCTL_STATE_URL="http://<state-host>:9000"
+```
+
+```bash
+export SAGCTL_STATE_TOKEN="<shared-secret>"
+```
+
+Đó là toàn bộ cấu hình — một cost cap, một queue, một audit log cho cả fleet. Không set
+gì thì engine giữ nguyên file cục bộ như cũ; không có bước migrate, không đổi hành vi với
+setup một máy.
+
+Kiểm chứng đã ăn:
+
+```bash
+sagctl doctor
+```
+
+Khối `state` báo `backend: http` và service có tới được không. Nếu một máy báo `local`
+còn máy khác báo `http` thì chúng **không** dùng chung state, dù cùng publish vào một
+source trên SAG.
+
+Service này là kho lưu trữ câm, không giữ policy nào: manifest vẫn quyết định cái gì được
+publish, deterministic floor vẫn chạy trên máy của agent. Chiếm được nó thì kẻ tấn công
+giả mạo được lịch sử audit và reset được bộ đếm chi phí, chứ không publish được thứ mà
+floor đã từ chối. Xem [SPEC amendment A1](docs/SPEC.md#a1-state-location-is-pluggable--local-default--http-fleet-shared).
+
+### Sinh cấu hình cho từng máy
+
+`source_id` chỉ khai một lần — trong manifest, trong Git. Mọi cấu hình phía agent đều
+sinh ra từ đó, không chép tay giữa các máy. Chạy trong repo, trên máy đang cài:
+
+```bash
+sagctl adapter-emit claude-code --write .
+```
+
+Với target khác:
+
+```bash
+sagctl adapter-emit hermes --plugin-root /opt/agent-skills/sag-agents-plugin
+```
+
+```bash
+sagctl adapter-emit codex --plugin-root /opt/agent-skills/sag-agents-plugin
+```
+
+URL đọc sinh ra có mang scope — `${SAG_URL}/mcp/?source_id=<id>` — nên agent làm việc ở
+project A không vô tình lôi được tri thức của project B. Không tìm thấy manifest thì lệnh
+vẫn chạy nhưng in cảnh báo và đánh dấu cấu hình là unscoped: đó phải là một lựa chọn nhìn
+thấy được, không phải mặc định lặng lẽ.
+
+File nào thường đã có nội dung khác (`settings.json`, `config.yaml`, `config.toml`) thì
+được in ra để bạn tự merge chứ không ghi đè. Chỉ `.mcp.json` — vốn hoàn toàn của plugin —
+mới được ghi thẳng.
+
+**Scoping này đáng giá tới đâu:** phòng thủ nhiều lớp, không phải ranh giới. SAG không có
+isolation giữa các identity (selftest S11) và cả fleet dùng chung một read token, nên
+chính token đó vẫn gọi được URL không scope. Nó chặn việc lấy chéo project một cách vô ý,
+không chặn kẻ cố tình. Case `S17` đo điều này trên chính instance của bạn thay vì tin
+suông — chạy nó trước khi dựa vào lời khẳng định trên:
+
+```bash
+sagctl selftest --url http://<sag-host>:8000 --token <token> --case S17
+```
+
+Xem [SPEC amendment A2](docs/SPEC.md#a2-agent-side-config-is-generated-from-the-manifest-read-mcp-is-scoped).
 
 ---
 
