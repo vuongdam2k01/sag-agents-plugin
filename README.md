@@ -329,11 +329,15 @@ Files that normally already hold unrelated content (`settings.json`, `config.yam
 `config.toml`) are printed for you to merge rather than written over. Only `.mcp.json`,
 which is wholly ours, is written directly.
 
-**What the scoping is worth:** defence in depth, not a boundary. SAG has no isolation
-between identities (selftest S11) and the fleet shares one read token, so the same token
-still reaches an unscoped URL. It stops casual cross-project retrieval, not a determined
-one. Selftest case `S17` measures this on your own instance rather than taking it on
-trust — run it before relying on the claim:
+**What the scoping is worth — measured, not assumed.** Selftest `S17` on `sag.home`
+(2026-08-01) found that `?source_id=` **is** enforced for document access: an agent scoped
+to source B cannot pull source A's documents. But `list_sources` still returns every
+source on the instance, so an agent can enumerate the other projects' names and ids —
+content is separated, metadata is not. And the ceiling is unchanged: the fleet shares one
+read token, so an agent that builds an unscoped url reaches everything anyway. Scoping
+constrains the tools the agent is handed, not what its credential can do.
+
+That result describes `sag.home`. Measure your own instance:
 
 ```bash
 sagctl selftest --url http://<sag-host>:8000 --token <token> --case S17

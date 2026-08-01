@@ -328,11 +328,15 @@ File nào thường đã có nội dung khác (`settings.json`, `config.yaml`, `
 được in ra để bạn tự merge chứ không ghi đè. Chỉ `.mcp.json` — vốn hoàn toàn của plugin —
 mới được ghi thẳng.
 
-**Scoping này đáng giá tới đâu:** phòng thủ nhiều lớp, không phải ranh giới. SAG không có
-isolation giữa các identity (selftest S11) và cả fleet dùng chung một read token, nên
-chính token đó vẫn gọi được URL không scope. Nó chặn việc lấy chéo project một cách vô ý,
-không chặn kẻ cố tình. Case `S17` đo điều này trên chính instance của bạn thay vì tin
-suông — chạy nó trước khi dựa vào lời khẳng định trên:
+**Scoping này đáng giá tới đâu — đã đo, không phải phỏng đoán.** Case `S17` trên
+`sag.home` (2026-08-01) cho thấy `?source_id=` **có** được server cưỡng chế với việc truy
+cập document: agent scope về source B không lấy được document của source A. Nhưng
+`list_sources` vẫn trả về mọi source trên instance, nên agent vẫn liệt kê được tên và id
+của các project khác — nội dung được tách, metadata thì không. Và trần vẫn nguyên: cả
+fleet dùng chung một read token, nên agent nào tự dựng url không scope thì với tới tất cả.
+Scoping giới hạn công cụ đưa cho agent, không giới hạn thứ mà credential của nó làm được.
+
+Kết quả đó mô tả `sag.home`. Đo instance của bạn:
 
 ```bash
 sagctl selftest --url http://<sag-host>:8000 --token <token> --case S17
