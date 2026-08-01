@@ -42,6 +42,19 @@ def _format_value(v) -> str:
     return s
 
 
+# Only these carry provenance inside the uploaded bytes. Prepending a YAML block to
+# a .json corrupts it, to a .py breaks it, to a .pdf is impossible — which is exactly
+# why everything else used to be excluded from publishing altogether. It no longer is:
+# provenance for the rest lives in the state store (SPEC A1/A3).
+FRONTMATTER_FORMATS = {".md", ".markdown"}
+
+
+def can_carry_frontmatter(path) -> bool:
+    from pathlib import Path as _P
+
+    return _P(path).suffix.lower() in FRONTMATTER_FORMATS
+
+
 def inject(original_text: str, provenance: dict) -> str:
     prov_lines = "\n".join(f"{k}: {_format_value(v)}" for k, v in provenance.items())
     m = _FRONTMATTER_RE.match(original_text)

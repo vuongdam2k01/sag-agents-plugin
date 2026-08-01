@@ -54,6 +54,7 @@ results recorded in [docs/SPEC.md](docs/SPEC.md)).
 - [Quick start](#quick-start)
 - [Installation](#installation)
 - [Configuration: the manifest](#configuration-the-manifest)
+- [Publishing without a file, without a repo](#publishing-without-a-file-without-a-repo)
 - [How a publish actually happens](#how-a-publish-actually-happens)
 - [MCP tools](#mcp-tools)
 - [CLI reference](#cli-reference)
@@ -225,7 +226,7 @@ Each repo that publishes to SAG carries a `.sag-sync.json` at a directory that i
   ],
   "deny_paths": ["docs/pricing/**"],
   "ask_paths": [],
-  "include": ["**/*.md"],
+  "include": ["docs/**/*.md"],
   "exclude": [],
   "max_files": 50,
   "max_publishes_per_day": 30,
@@ -233,10 +234,18 @@ Each repo that publishes to SAG carries a `.sag-sync.json` at a directory that i
 }
 ```
 
+`include` above (`docs/**/*.md`) is this *example* repo choosing to publish only its docs
+folder — not the engine default. The default is `["**/*"]`: every extension SAG accepts
+(`.pdf`, `.docx`, `.csv`, `.json`, ...), not just markdown. Provenance for anything that
+cannot carry YAML frontmatter lives in the state store instead of the file bytes — see
+[Publishing without a file, without a repo](#publishing-without-a-file-without-a-repo).
+
 | Field | Meaning |
 |---|---|
 | `key_format` | `flat` (default) or `path`. **Verify with `sagctl selftest --case S1`** — most SAG instances truncate an uploaded filename to its basename, which is why `flat` is the default. |
-| `require` | Git state required before publishing: `committed` (default) · `pushed` · `merged`. |
+| `require` | Git state required before publishing: `committed` (default) · `pushed` · `merged`. Only consulted when the manifest sits above a real Git repo — outside one this clause is inapplicable, not bypassed. |
+| `canonical_branch` | Only consulted by `require: pushed\|merged` and by `maintain`'s stale-branch check — inert otherwise. |
+| `include` | Defaults to `**/*` — every format SAG accepts, not just markdown (SPEC A3). Narrow it deliberately; a narrower `include` silently decides what can be knowledge before the model is ever asked, and `doctor --unassessed` only scans within it. |
 | `min_confidence` | Below this, a `knowledge` verdict is queued for human review instead of auto-published. |
 | `criteria` | Natural-language rules for the *model's* judgment. If criteria exist but the assessment acknowledges none, the publish is queued — not auto-approved. |
 | `deny_paths` | Deterministic engine-side block. Blocks **manual mode too**. |
@@ -351,6 +360,64 @@ sagctl selftest --url http://<sag-host>:8000 --token <token> --case S17
 ```
 
 See [SPEC amendment A2](docs/SPEC.md#a2-agent-side-config-is-generated-from-the-manifest-read-mcp-is-scoped).
+
+---
+
+## Publishing without a file, without a repo
+
+Two restrictions used to be welded into the engine that were never actually policy:
+provenance only fit inside YAML frontmatter, so only markdown could be published; and
+publishing required a Git commit, so an agent whose working area was not a checkout — a
+Hermes profile, a research session — could not publish at all. Both were storage details
+(frontmatter needs text; a commit needs a repo) enforced as if they were rules about what
+counts as knowledge. Neither is true anymore (SPEC amendment A3).
+
+**Any format SAG accepts can be published.** `include` now defaults to `**/*`. Provenance
+for anything that cannot carry frontmatter (`.pdf`, `.docx`, `.csv`, `.json`, ...) lives in
+the state store instead of the file — same authority, same place `maintain` and `doctor`
+already look.
+
+**A PDF or DOCX is not uploaded raw, though — it's distilled.** The engine does not parse
+binary formats; that stays the agent's job, and Claude Code (and others) already ship
+document skills for exactly this. Read the artifact, write markdown, publish that:
+
+```bash
+sagctl publish docs/contract-analysis.md --assessment '{"verdict":"knowledge", ...}'
+```
+
+recording the original in `derived_from` — see below. The distillation chunks better than
+a server-side parse would (headings the agent wrote, not `markitdown`'s output) and the
+floor covers it completely; a raw binary the floor cannot decode routes to human review
+instead of being silently certified "clean".
+
+**No file at all — `sagctl publish-content` / MCP tool `sag_publish_content`.** For text
+the agent authored directly: a synthesis from a chat session, a distillation with nothing
+worth keeping as a separate file.
+
+```bash
+sagctl publish-content research/2026-08-01-pricing-competitors.md \
+  --content-file /tmp/synthesis.md \
+  --derived-from "docs/vendor-report.pdf@a1b2c3d,https://example.com/pricing" \
+  --assessment '{"verdict":"knowledge", ...}'
+```
+
+`relpath` (the first argument) is a key you choose — it is matched against
+`include`/`exclude`/`deny_paths`/`ask_paths` exactly like a real file's path, and encoded
+into the SAG key the same way. No new policy concepts, no new manifest fields. There is no
+manual-mode bypass here: an assessment is always required, because there is no file for a
+slash command's token to point at.
+
+**The manifest still has to resolve**, just not by walking up from a file:
+`--manifest <path>`, `--manifest-name <name>` (looked up under
+`~/.sagctl/manifests/<name>.json`), the `SAGCTL_MANIFEST` environment variable, or a
+`.sag-sync.json` above the current directory — which itself does not have to be inside a
+Git repo.
+
+**What does not change:** the deterministic floor still runs in full (secret scan,
+`deny_paths`, cost cap), the model still cannot assert `secret_free`, and `maintain`'s
+orphan/stale-branch detection explicitly **skips** anything published this way — asking
+"is this path still in the repo" is meaningless, and dangerous, for a document that was
+never a real repo path.
 
 ---
 

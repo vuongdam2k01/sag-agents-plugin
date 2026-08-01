@@ -168,19 +168,19 @@ profiles:
     mcp_servers:
       sagw:
         tools:
-          include: [sag_publish, sag_publish_status, sag_sync_preview]
+          include: [sag_publish, sag_publish_content, sag_publish_status, sag_sync_preview]
 
   developer:
     mcp_servers:
       sagw:
         tools:
-          include: [sag_publish, sag_publish_status, sag_sync_preview, sag_reprocess]
+          include: [sag_publish, sag_publish_content, sag_publish_status, sag_sync_preview, sag_reprocess]
 
   delivery_engineer:
     mcp_servers:
       sagw:
         tools:
-          include: [sag_publish, sag_publish_status, sag_sync_preview, sag_reprocess, sag_unpublish]
+          include: [sag_publish, sag_publish_content, sag_publish_status, sag_sync_preview, sag_reprocess, sag_unpublish]
 
   orchestrator:
     # The only role with batch sync / queue-review / source-admin. Those are CLI-only
@@ -188,7 +188,7 @@ profiles:
     mcp_servers:
       sagw:
         tools:
-          include: [sag_publish, sag_publish_status, sag_sync_preview, sag_reprocess, sag_publish_unreviewed, sag_unpublish]
+          include: [sag_publish, sag_publish_content, sag_publish_status, sag_sync_preview, sag_reprocess, sag_publish_unreviewed, sag_unpublish]
     env:
       SAGCTL_ALLOW_SYNC: "1"
       SAGCTL_ALLOW_QUEUE_REVIEW: "1"
@@ -239,7 +239,7 @@ list_sources → list_documents → outline → search|grep → get_chunk|read �
 get_entity. A durable citation = `source + file path` (do not use document_id
 /chunk_id — they change every time a document is republished).
 
-Write via the MCP server `sagw`, tool `sag_publish{{path, assessment}}`. Right
+Write via the MCP server `sagw`, tool `sag_publish{{path, assessment}}` for a file already on disk, or `sag_publish_content{{relpath, content, assessment}}` for text you authored yourself — a distillation of a PDF/DOCX read with a document skill, a synthesis with no file behind it. Neither needs the file to be inside a Git repo; Git only adds traceability where one exists. Right
 after creating/editing a durable document (requirement, ADR, design, runbook,
 accepted research) AND committing it, self-assess against 5 criteria (durable,
 shared, retrieval-suitable, committed, secret-free) and then call `sag_publish`

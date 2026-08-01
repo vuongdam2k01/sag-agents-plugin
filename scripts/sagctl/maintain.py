@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import audit, gitutil, manifest as manifest_mod, provenance
+from . import audit, gitutil, manifest as manifest_mod, provenance, state
 from .restclient import SagClient
 
 
@@ -110,6 +110,21 @@ def dedupe_source(client: SagClient, source_id: str, repo_root: Path, canonical_
     return outcomes
 
 
+def _reconcilable(source_id: str, key: str) -> bool:
+    """Was this document ever a path inside THIS repo? Orphan/stale-branch detection
+    both ask "does the path still exist at HEAD" — meaningless, and dangerous, for a
+    document that was never in the repo to begin with (an authored synthesis, a file
+    published from outside any Git checkout — SPEC A3). The state store's provenance
+    record is authoritative here: `sag_in_git` says so directly. A document with no
+    state-store record at all predates A1/A3 and is treated as reconcilable, matching
+    the engine's behavior before this distinction existed.
+    """
+    rec = state.provenance_get(source_id, key)
+    if rec is None:
+        return True
+    return bool(rec.get("sag_in_git", True))
+
+
 def find_orphans(client: SagClient, source_id: str, repo_root: Path, canonical_branch: str) -> list[dict]:
     """An 'orphan' = a document in SAG whose corresponding path no longer exists
     at the HEAD of canonical_branch (defined by Git HEAD, NOT by lock —
@@ -123,6 +138,8 @@ def find_orphans(client: SagClient, source_id: str, repo_root: Path, canonical_b
     for d in docs:
         key = d.get("filename", "")
         if not key:
+            continue
+        if not _reconcilable(source_id, key):
             continue
         # key may be flat-encoded; assume the caller passes key_format via closure
         # if the path does not exist at ref -> orphan
@@ -156,6 +173,8 @@ def find_stale_branch(client: SagClient, source_id: str, repo_root: Path, manife
         blob = provenance.extract_frontmatter_field(content, "sag_source_blob")
         published_at = provenance.extract_frontmatter_field(content, "sag_published_at")
         key = provenance.extract_frontmatter_field(content, "sag_key") or d.get("filename", "")
+        if not _reconcilable(source_id, key):
+            continue
         if not commit or not published_at:
             continue
         try:

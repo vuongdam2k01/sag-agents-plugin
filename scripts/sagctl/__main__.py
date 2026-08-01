@@ -174,6 +174,41 @@ def cmd_publish(args):
     return 0
 
 
+def cmd_publish_content(args):
+    """`sagctl publish-content` (SPEC A3) — text handed on the command line or read
+    from a file, no repo required. The manifest still must be resolvable: via
+    --manifest, --manifest-name, $SAGCTL_MANIFEST, or a .sag-sync.json above the
+    current directory (which does not itself have to be a Git repo)."""
+    assessment = _read_assessment_arg(args.assessment, args.assessment_file)
+    content = Path(args.content_file).read_text(encoding="utf-8") if args.content_file else args.content
+    if content is None:
+        print("PUBLISH_ERROR: provide --content or --content-file", file=sys.stderr)
+        return 1
+    derived_from = args.derived_from.split(",") if args.derived_from else None
+    try:
+        result = publish_mod.publish_content(
+            args.relpath,
+            content,
+            assessment=assessment,
+            derived_from=derived_from,
+            manifest_path=Path(args.manifest) if args.manifest else None,
+            manifest_name=args.manifest_name,
+            agent=args.agent or _agent_name(),
+            trigger=args.trigger,
+            wait=args.wait,
+            wait_timeout=args.wait_timeout,
+            dry_run=args.dry_run,
+            profile=args.profile,
+        )
+    except publish_mod.PublishError as e:
+        print(f"PUBLISH_ERROR {e.code}: {e}", file=sys.stderr)
+        return 1
+    _print_json(result.__dict__)
+    if result.status == "failed_or_empty":
+        return 2
+    return 0
+
+
 def cmd_publish_status(args):
     doc = publish_mod.publish_status(args.source_id, args.key, profile=args.profile)
     if doc is None:
@@ -559,6 +594,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true")
     add_profile(sp)
     sp.set_defaults(func=cmd_publish)
+
+    sp = sub.add_parser(
+        "publish-content",
+        help="publish agent-authored text (SPEC A3) — no file, no repo required",
+    )
+    sp.add_argument("relpath", help="a path-shaped key, e.g. research/2026-08-01-notes.md")
+    sp.add_argument("--content", default=None, help="the document text")
+    sp.add_argument("--content-file", default=None, help="read the document text from this file")
+    sp.add_argument("--derived-from", default=None, help="comma-separated: repo paths, urls, or SAG keys this was distilled from")
+    sp.add_argument("--assessment", default=None, help="JSON string")
+    sp.add_argument("--assessment-file", default=None)
+    sp.add_argument("--manifest", default=None, help="explicit manifest path")
+    sp.add_argument("--manifest-name", default=None, help="a manifest under ~/.sagctl/manifests/<name>.json")
+    sp.add_argument("--agent", default=None)
+    sp.add_argument("--trigger", default="user-command")
+    sp.add_argument("--wait", action="store_true")
+    sp.add_argument("--wait-timeout", type=float, default=90.0)
+    sp.add_argument("--dry-run", action="store_true")
+    add_profile(sp)
+    sp.set_defaults(func=cmd_publish_content)
 
     sp = sub.add_parser("publish-status")
     sp.add_argument("source_id"); sp.add_argument("key"); add_profile(sp)

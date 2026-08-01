@@ -177,6 +177,28 @@ class LocalBackend:
             self._queue_save(source_id, items)
             return item
 
+    # -- provenance (SPEC A3) --
+    def provenance_put(self, source_id: str, key: str, record: dict) -> dict:
+        with self._lock(source_id, "prov"):
+            data = self._prov_load(source_id)
+            data[key] = record
+            (config.source_dir(source_id) / "provenance.json").write_text(
+                json.dumps(data, ensure_ascii=False), encoding="utf-8"
+            )
+            return record
+
+    def provenance_get(self, source_id: str, key: str) -> dict | None:
+        return self._prov_load(source_id).get(key)
+
+    def _prov_load(self, source_id: str) -> dict:
+        path = config.source_dir(source_id) / "provenance.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
     def queue_set_status(self, source_id: str, queue_id: str, status: str, reviewer: str) -> dict:
         with self._lock(source_id, "queue"):
             items = self._queue_load(source_id)
@@ -278,6 +300,15 @@ class HttpBackend:
             {"status": status, "reviewer": reviewer},
         )
 
+    def provenance_put(self, source_id: str, key: str, record: dict) -> dict:
+        return self._call(
+            "POST", f"/v1/{self._skey(source_id)}/provenance", {"key": key, "record": record}
+        ) or record
+
+    def provenance_get(self, source_id: str, key: str) -> dict | None:
+        res = self._call("POST", f"/v1/{self._skey(source_id)}/provenance/get", {"key": key})
+        return (res or {}).get("record")
+
 
 # --------------------------------------------------------------------------
 # dispatch
@@ -349,3 +380,15 @@ def queue_add(source_id: str, item: dict) -> dict:
 
 def queue_set_status(source_id: str, queue_id: str, status: str, reviewer: str) -> dict:
     return get_backend().queue_set_status(source_id, queue_id, status, reviewer)
+
+
+def provenance_put(source_id: str, key: str, record: dict) -> dict:
+    """Provenance for documents whose bytes cannot carry it — binaries, and anything
+    published without a Git commit behind it (SPEC A3). Before the shared state store
+    existed there was nowhere durable to keep this: SAG's upload accepts no metadata
+    (DESIGN §1.3, consequence 3)."""
+    return get_backend().provenance_put(source_id, key, record)
+
+
+def provenance_get(source_id: str, key: str) -> dict | None:
+    return get_backend().provenance_get(source_id, key)

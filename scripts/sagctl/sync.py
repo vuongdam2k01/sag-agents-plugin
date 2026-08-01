@@ -26,7 +26,12 @@ class SyncResult:
 
 
 def _list_candidate_files(repo_root: Path, manifest: dict) -> list[Path]:
-    include = manifest.get("include") or ["**/*.md"]
+    # The fallback MUST match manifest.DEFAULTS["include"], gate.py's, and
+    # routing.py's — three independent literals here previously (this one was
+    # **/*.md, the other two were **/* already) is exactly how a manifest with
+    # an explicit empty `include: []` would get sync and the publish floor
+    # disagreeing about what "everything" means (SPEC A3).
+    include = manifest.get("include") or manifest_mod.DEFAULTS["include"]
     exclude = manifest.get("exclude") or []
     seen: set[Path] = set()
     for pattern in include:

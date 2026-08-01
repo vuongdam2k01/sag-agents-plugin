@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import globmatch
+from . import manifest as manifest_mod
 
 
 class Route:
@@ -29,7 +30,9 @@ def path_matches_any(relpath: str, patterns: list[str]) -> bool:
 
 
 def _included(relpath: str, manifest: dict) -> bool:
-    include = manifest.get("include") or ["**/*"]
+    # Same fallback as gate.check_path_policy and sync._list_candidate_files —
+    # manifest.DEFAULTS["include"] is the single source of truth (SPEC A3).
+    include = manifest.get("include") or manifest_mod.DEFAULTS["include"]
     excluded = path_matches_any(relpath, manifest.get("exclude") or [])
     if excluded:
         return False

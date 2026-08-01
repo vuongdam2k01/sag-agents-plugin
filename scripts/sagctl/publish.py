@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import assessment as assessment_mod
 from . import audit, config, gate, gitutil, keys, manifest as manifest_mod
-from . import manual, provenance, routing
+from . import manual, provenance, routing, state
 from .restclient import SagApiError, SagClient
 
 # The replace strategy is NOT YET FINAL — pending selftest S4 (BLOCKING, see docs/SPEC.md §S9).
@@ -91,6 +91,7 @@ def publish_one(
 
     m = manifest_mod.load_for(file_path)
     repo_root = manifest_mod.repo_root(m)
+    in_git_repo = manifest_mod.git_root(m) is not None
     config.assert_no_repo_state_leak(repo_root)
     relpath = manifest_mod.relpath_of(file_path, m)
     key = keys.encode_key(relpath, m["key_format"])
@@ -137,9 +138,26 @@ def publish_one(
     initiator = "user-manual" if decision.route == routing.Route.MANUAL else "agent-auto"
 
     floor = gate.check_floor(
-        file_path=file_path, repo_root=repo_root, relpath=relpath, key=key, manifest=m, source_id=source_id
+        file_path=file_path, repo_root=repo_root, relpath=relpath, key=key, manifest=m,
+        source_id=source_id, in_git_repo=in_git_repo,
     )
     if not floor.ok:
+        if floor.code == "UNSCANNABLE" and decision.route == routing.Route.AUTO:
+            # The engine could not read these bytes, so it will not certify them. That
+            # is a reason for a human to look, not a reason the document cannot be
+            # knowledge — banning the format would be the engine making the assessment's
+            # decision for it.
+            from . import queue as queue_mod
+
+            queue_mod.enqueue(
+                source_id, path=str(file_path), key=key, relpath=relpath,
+                assessment=assessment, reason=f"not secret-scannable by the engine: {floor.reason}",
+                agent=agent,
+            )
+            return PublishResult(
+                status="queued", key=key, route=routing.Route.QUEUE,
+                reason=floor.reason, source_id=source_id,
+            )
         audit.append(
             source_id,
             {"event": "publish_rejected_floor", "key": key, "code": floor.code, "reason": floor.reason, "agent": agent},
@@ -147,20 +165,30 @@ def publish_one(
         raise PublishError(floor.code, floor.reason)
 
     blob = gitutil.hash_object(file_path)
-    commit = gitutil.last_commit_touching(relpath, repo_root)
+    commit = gitutil.last_commit_touching(relpath, repo_root) if in_git_repo else None
 
-    original_text = file_path.read_text(encoding="utf-8")
-    upload_text = provenance.inject(
-        original_text,
-        {
-            "sag_key": key,
-            "sag_source_commit": commit,
-            "sag_source_blob": blob,
-            "sag_published_at": _now_iso(),
-            "sag_status": "published",
-            "sag_route": decision.route,
-        },
-    )
+    prov_record = {
+        "sag_key": key,
+        "sag_source_commit": commit,
+        "sag_source_blob": blob,
+        "sag_published_at": _now_iso(),
+        "sag_status": "published",
+        "sag_route": decision.route,
+        "sag_in_git": in_git_repo,
+        "sag_secret_scanned": floor.code != "UNSCANNABLE",
+    }
+
+    # Where provenance goes depends on the format, not on whether the document is
+    # allowed to exist. Markdown carries it in-band (S3, survives SAG's parser per
+    # S7); everything else — .pdf, .docx, .json, .csv — gets it in the state store,
+    # which is where `maintain` looks when the parsed document has no frontmatter.
+    if provenance.can_carry_frontmatter(file_path):
+        upload_bytes = provenance.inject(
+            file_path.read_text(encoding="utf-8"), prov_record
+        ).encode("utf-8")
+    else:
+        upload_bytes = file_path.read_bytes()
+    state.provenance_put(source_id, key, prov_record)
 
     full_assessment = None
     if assessment is not None:
@@ -194,13 +222,13 @@ def publish_one(
     strategy = DEFAULT_REPLACE_STRATEGY
     if existing and strategy == "delete_first":
         _replace_delete_first(client, source_id, existing)
-        doc = client.upload_document(source_id, key, upload_text.encode("utf-8"))
+        doc = client.upload_document(source_id, key, upload_bytes)
     elif existing and strategy == "upload_then_delete":
         doc = _replace_upload_then_delete(
-            client, source_id, existing, lambda: client.upload_document(source_id, key, upload_text.encode("utf-8"))
+            client, source_id, existing, lambda: client.upload_document(source_id, key, upload_bytes)
         )
     else:
-        doc = client.upload_document(source_id, key, upload_text.encode("utf-8"))
+        doc = client.upload_document(source_id, key, upload_bytes)
 
     keys.assert_no_drift(key, doc.get("filename", ""))
 
@@ -216,6 +244,175 @@ def publish_one(
             "agent": agent,
             "commit": commit,
             "blob": blob,
+            "assessment": full_assessment,
+            "replace_strategy": strategy if existing else None,
+        },
+    )
+    audit.bump_cost_counter(source_id, key)
+
+    if wait:
+        doc = _wait_for_ready(client, source_id, doc["id"], timeout=wait_timeout)
+
+    status = "pending"
+    if wait:
+        status = "ready" if doc.get("status") == "ready" and doc.get("chunk_count", 0) > 0 else "failed_or_empty"
+
+    return PublishResult(status=status, key=key, document_id=doc.get("id"), route=decision.route, source_id=source_id)
+
+
+def publish_content(
+    relpath: str,
+    text: str,
+    *,
+    assessment: dict | None = None,
+    derived_from: list[str] | None = None,
+    manifest_path: Path | None = None,
+    manifest_name: str | None = None,
+    agent: str = "unknown",
+    trigger: str = "end-of-task",
+    wait: bool = False,
+    wait_timeout: float = 90.0,
+    dry_run: bool = False,
+    profile: str = "default",
+) -> PublishResult:
+    """Publish text the agent authored — no file, no repo required (SPEC A3).
+
+    For a Hermes session synthesising a research note, or an agent distilling a PDF it
+    just read with a document skill: the knowledge is real, but there is no commit —
+    sometimes no file at all — to hang the old Git-only provenance model on.
+
+    `relpath` is chosen by the caller (e.g. `research/2026-08-01-pricing-competitors.md`)
+    and plays exactly the role a real file's relpath plays in `publish_one()`: it is what
+    `include`/`exclude`/`deny_paths`/`ask_paths` match against, and what `key_format`
+    encodes into the SAG key. Reusing that machinery means no new policy concepts and no
+    new manifest fields — a document authored this way is governed by the exact same
+    rules as a file, minus the clause that needs a commit.
+
+    `derived_from` keeps the citation chain when this is a distillation: repo paths
+    (ideally `path@blobsha`), URLs, or other SAG keys.
+
+    The manifest is resolved without a file to walk up from: `manifest_path`,
+    `manifest_name`, `$SAGCTL_MANIFEST`, then a walk up from the current working
+    directory (which does not require that directory to be a Git repo — see
+    `manifest.find_manifest()`), in that order (see `manifest.resolve()`).
+    """
+    m = manifest_mod.resolve(Path.cwd(), explicit=manifest_path, name=manifest_name)
+    source_id = m["source_id"]
+    key = keys.encode_key(relpath, m["key_format"])
+
+    decision = routing.decide(
+        relpath=relpath, manifest=m, assessment=assessment, manual_token_valid=False
+    )
+
+    if decision.route == routing.Route.REJECT_DENY:
+        audit.append(source_id, {"event": "publish_denied", "key": key, "reason": decision.reason, "agent": agent})
+        raise PublishError("DENIED_PATH", decision.reason)
+    if decision.route == routing.Route.REJECT_NOT_INCLUDED:
+        raise PublishError("NOT_INCLUDED", decision.reason)
+    if decision.route == routing.Route.REJECT_NOT_KNOWLEDGE:
+        audit.append(
+            source_id,
+            {"event": "publish_skipped", "key": key, "reason": decision.reason, "agent": agent, "assessment": assessment},
+        )
+        return PublishResult(status="skipped", key=key, route=decision.route, reason=decision.reason, source_id=source_id)
+    if decision.route == routing.Route.QUEUE:
+        from . import queue as queue_mod
+
+        queue_mod.enqueue(
+            source_id,
+            path=f"authored:{relpath}",
+            key=key,
+            relpath=relpath,
+            assessment=assessment,
+            reason=decision.reason,
+            agent=agent,
+            content=text,
+            derived_from=derived_from,
+            manifest_path=m["_path"],
+        )
+        return PublishResult(status="queued", key=key, route=decision.route, reason=decision.reason, source_id=source_id)
+
+    # route is AUTO (Mode B has no manual bypass — see publish_content's docstring
+    # and SPEC A3: there is no file for a slash command to point a token at).
+    floor = gate.check_floor_content(relpath=relpath, key=key, manifest=m, source_id=source_id, text=text)
+    if not floor.ok:
+        audit.append(
+            source_id,
+            {"event": "publish_rejected_floor", "key": key, "code": floor.code, "reason": floor.reason, "agent": agent},
+        )
+        raise PublishError(floor.code, floor.reason)
+
+    prov_record = {
+        "sag_key": key,
+        "sag_source_commit": None,
+        "sag_source_blob": None,
+        "sag_derived_from": list(derived_from or []),
+        "sag_published_at": _now_iso(),
+        "sag_status": "published",
+        "sag_route": decision.route,
+        "sag_in_git": False,
+        "sag_authored": True,
+        "sag_secret_scanned": True,
+    }
+
+    if provenance.can_carry_frontmatter(Path(relpath)):
+        upload_bytes = provenance.inject(text, prov_record).encode("utf-8")
+    else:
+        upload_bytes = text.encode("utf-8")
+    state.provenance_put(source_id, key, prov_record)
+
+    full_assessment = None
+    if assessment is not None:
+        full_assessment = assessment_mod.enrich(
+            assessment,
+            initiator="agent-auto",
+            trigger=trigger,
+            agent=agent,
+            key=key,
+            criteria_available=[c["id"] for c in m.get("criteria", [])],
+        )
+
+    if dry_run:
+        existing_preview = None
+        try:
+            client = _client_from_credentials(profile)
+            existing_preview = find_existing_by_key(client, source_id, key)
+        except (PublishError, SagApiError):
+            pass
+        return PublishResult(
+            status="dry-run", key=key, route=decision.route,
+            reason=f"would_replace={'yes' if existing_preview else 'no'}", source_id=source_id,
+        )
+
+    client = _client_from_credentials(profile)
+    existing = find_existing_by_key(client, source_id, key)
+
+    strategy = DEFAULT_REPLACE_STRATEGY
+    if existing and strategy == "delete_first":
+        _replace_delete_first(client, source_id, existing)
+        doc = client.upload_document(source_id, key, upload_bytes)
+    elif existing and strategy == "upload_then_delete":
+        doc = _replace_upload_then_delete(
+            client, source_id, existing, lambda: client.upload_document(source_id, key, upload_bytes)
+        )
+    else:
+        doc = client.upload_document(source_id, key, upload_bytes)
+
+    keys.assert_no_drift(key, doc.get("filename", ""))
+
+    audit.append(
+        source_id,
+        {
+            "event": "published",
+            "key": key,
+            "document_id": doc.get("id"),
+            "route": decision.route,
+            "initiator": "agent-auto",
+            "trigger": trigger,
+            "agent": agent,
+            "commit": None,
+            "blob": None,
+            "derived_from": list(derived_from or []),
             "assessment": full_assessment,
             "replace_strategy": strategy if existing else None,
         },
@@ -349,32 +546,37 @@ def publish_unreviewed(
     if not cost_result.ok:
         raise PublishError(cost_result.code, cost_result.reason)
 
+    in_git_repo = manifest_mod.git_root(m) is not None
     blob = gitutil.hash_object(file_path)
-    commit = gitutil.last_commit_touching(relpath, repo_root) or "UNCOMMITTED"
-    original_text = file_path.read_text(encoding="utf-8")
-    upload_text = provenance.inject(
-        original_text,
-        {
-            "sag_key": key,
-            "sag_source_commit": commit,
-            "sag_source_blob": blob,
-            "sag_published_at": _now_iso(),
-            "sag_status": "unreviewed",
-            "sag_route": "unreviewed",
-        },
-    )
+    commit = (gitutil.last_commit_touching(relpath, repo_root) or "UNCOMMITTED") if in_git_repo else None
+    prov_record = {
+        "sag_key": key,
+        "sag_source_commit": commit,
+        "sag_source_blob": blob,
+        "sag_published_at": _now_iso(),
+        "sag_status": "unreviewed",
+        "sag_route": "unreviewed",
+        "sag_in_git": in_git_repo,
+    }
+    if provenance.can_carry_frontmatter(file_path):
+        upload_bytes = provenance.inject(
+            file_path.read_text(encoding="utf-8"), prov_record
+        ).encode("utf-8")
+    else:
+        upload_bytes = file_path.read_bytes()
+    state.provenance_put(source_id, key, prov_record)
 
     client = _client_from_credentials(profile)
     existing = find_existing_by_key(client, source_id, key)
     if existing and DEFAULT_REPLACE_STRATEGY == "delete_first":
         _replace_delete_first(client, source_id, existing)
-        doc = client.upload_document(source_id, key, upload_text.encode("utf-8"))
+        doc = client.upload_document(source_id, key, upload_bytes)
     elif existing:
         doc = _replace_upload_then_delete(
-            client, source_id, existing, lambda: client.upload_document(source_id, key, upload_text.encode("utf-8"))
+            client, source_id, existing, lambda: client.upload_document(source_id, key, upload_bytes)
         )
     else:
-        doc = client.upload_document(source_id, key, upload_text.encode("utf-8"))
+        doc = client.upload_document(source_id, key, upload_bytes)
     keys.assert_no_drift(key, doc.get("filename", ""))
 
     audit.append(
