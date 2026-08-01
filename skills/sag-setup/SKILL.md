@@ -169,8 +169,11 @@ sagctl adapter-emit claude-code --write .
 ```
 
 For the other tools, `sagctl adapter-emit hermes|codex --plugin-root <path>`. Merge the
-printed `settings.json` / `config.yaml` / `config.toml` blocks by hand — the command
-refuses to clobber files that hold unrelated settings.
+printed `settings.json` / `config.yaml` / `config.toml` blocks by hand yourself. The
+command **never writes those files, with or without `--force`** — a real settings.json
+or config.yaml typically holds a lot of unrelated configuration, and this command has no
+way to merge into it safely. `--force` only ever applies to `.mcp.json`, which is wholly
+generated content.
 
 ## Step 6 — more than one machine?
 

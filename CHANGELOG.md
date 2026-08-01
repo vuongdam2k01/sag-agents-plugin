@@ -11,6 +11,25 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sagctl adapter-emit --write --force` could destroy a real `.claude/settings.json`
+  with no backup.** Confirmed in the field (2026-08-01): a user's project settings, full
+  of unrelated hand-tuned permissions/hooks/env, was silently overwritten by the generated
+  block. Root cause: `--force` governed two unrelated risk classes as one flag —
+  "overwrite a file this command generated before" (safe, e.g. `.mcp.json`) and
+  "overwrite a merge-target that predates this command and holds unrelated content"
+  (never safe). The code's own comment said clobbering unrelated settings "is not this
+  command's job" and then did exactly that when `--force` was passed.
+  - Fixed: a merge-target (`settings.json`/`config.yaml`/`config.toml`) is now **never**
+    written by `adapter-emit`, with or without `--force`. There is no flag that bypasses
+    this. `--force` only ever applies to files the command generated itself.
+  - 5 new regression tests exercise the real CLI entry point against a realistic
+    pre-existing `settings.json`, including the exact `--force` invocation that caused
+    the incident — proving the file comes out byte-for-byte untouched.
+  - `skills/sag-setup/SKILL.md` and `adapters/claude-code/README.md` corrected — both
+    described the old (unsafe) behavior.
+
 ### Added
 
 - **Knowledge is no longer welded to `.md` files inside a Git repo (SPEC amendment A3,
