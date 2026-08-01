@@ -129,6 +129,14 @@ class SagClient:
         _, data = self._request("GET", "/api/v1/auth/me")
         return data
 
+    def capabilities(self) -> dict:
+        """`GET /system/capabilities` — needs no token (confirmed by selftest on
+        sag.home: max_upload_mb, supported formats, default search_strategy). Used
+        by `sagctl setup probe` to describe an instance before anything is
+        provisioned against it."""
+        _, data = self._request("GET", "/api/v1/system/capabilities")
+        return data or {}
+
     def health(self) -> dict:
         _, data = self._request("GET", "/api/v1/system/health")
         return data

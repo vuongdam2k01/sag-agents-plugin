@@ -27,7 +27,7 @@ Agent** và **Codex**, mang lại cho agent:
 - **Đọc** — MCP server upstream của chính SAG (`sag`), giữ nguyên, 8 tool.
 - **Ghi** — một MCP server chạy local (`sagw`, 6 tool) cộng với CLI (`sagctl`), cả hai
   dùng chung một engine, chỉ giao tiếp với SAG qua **REST API công khai**.
-- **Phán đoán** — 5 skill dạy agent *khi nào* một tài liệu là tri thức bền vững đáng chia
+- **Phán đoán** — 7 skill dạy agent *khi nào* một tài liệu là tri thức bền vững đáng chia
   sẻ, cùng một hợp đồng tự đánh giá có kiểu (typed) bắt buộc phải điền trước khi ghi bất
   cứ thứ gì.
 - **Sàn an toàn** — một tập kiểm tra tất định, không dùng LLM (trạng thái git, luật
@@ -44,7 +44,7 @@ Mọi thao tác đều đi qua REST API đã được tài liệu hoá của SAG
 nó. Bạn có thể nâng cấp SAG, hoặc trỏ plugin sang một instance SAG của người khác, mà
 không cần fork, không cần hàng đợi patch, không cần migration. Cái giá phải trả là plugin
 phải tự khám phá hành vi thật của SAG bằng thực nghiệm — đó chính là việc `sagctl
-selftest` làm (16 case thăm dò, kết quả ghi lại trong [docs/SPEC.md](docs/SPEC.md)).
+selftest` làm (17 case thăm dò, kết quả ghi lại trong [docs/SPEC.md](docs/SPEC.md)).
 
 ---
 
@@ -106,6 +106,13 @@ write token không bao giờ vào môi trường của agent.
 
 ## Bắt đầu nhanh
 
+Cài plugin xong thì gõ `/sag-setup` và trả lời câu hỏi của nó — skill sẽ đo instance SAG
+của bạn, mint token, scaffold manifest, và nối agent tool này vào. Nó có hai chế độ:
+**bootstrap** dựng scope mới, hoặc **join** vào scope agent khác đã tạo (bạn đưa
+`source_id`).
+
+Bản làm tay, nếu bạn muốn tự điều khiển:
+
 ```bash
 git clone https://github.com/vuongdam2k01/sag-agents-plugin.git
 cd sag-agents-plugin
@@ -116,8 +123,8 @@ python scripts/install-shim.py
 # 2. Đăng nhập — lưu write token tại ~/.sagctl/credentials.json (quyền 0600)
 sagctl login --url http://<sag-host>:8000 --name <tên-của-bạn>
 
-# 3. Kiểm chứng các giả định của plugin trên chính instance SAG của bạn
-sagctl selftest --url http://<sag-host>:8000 --token <token>
+# 3. Đo chính instance của bạn — key_format là kết quả đo, không phải hằng số
+sagctl setup probe --url http://<sag-host>:8000 --token <token>
 
 # 4. Tạo source và nối vào một project
 sagctl source create "my-project-knowledge"
@@ -154,7 +161,7 @@ export SAG_READ_TOKEN="<token chỉ đọc>"
 [Mô hình bảo mật](#mô-hình-bảo-mật).
 
 Plugin đăng ký cả hai MCP server ([.mcp.json](.mcp.json)), bốn hook
-([hooks/hooks.json](hooks/hooks.json)), slash command `/sag-publish`, và 5 skill. Sinh
+([hooks/hooks.json](hooks/hooks.json)), slash command `/sag-publish`, và 7 skill. Sinh
 cấu hình MCP có scope theo project cùng khối permission, chạy ngay trong repo:
 
 ```bash
@@ -472,8 +479,10 @@ shell và danh sách tiến trình. Nó chỉ được đọc từ `~/.sagctl/`.
 | [sag-maintain](skills/sag-maintain/SKILL.md) | có | Kiểm tra sức khoẻ: tài liệu failed, orphan, trùng lặp, review self-gate. Đề xuất, không tự phá. |
 | [sag-sync-project](skills/sag-sync-project/SKILL.md) | **không** | Sync hàng loạt cả repo. Chỉ người kích hoạt. |
 | [sag-source-admin](skills/sag-source-admin/SKILL.md) | **không** | Tạo/sửa/xoá source. Có tính phá huỷ, chỉ người kích hoạt. |
+| [sag-status](skills/sag-status/SKILL.md) | có | Chẩn đoán chỉ đọc: đang ở scope nào, state có dùng chung không, url đọc có scope không, file nào chưa assess. |
+| [sag-setup](skills/sag-setup/SKILL.md) | **không** | Setup lần đầu trên máy này — dựng scope mới hoặc join scope sẵn có. Chỉ người kích hoạt. |
 
-Hai skill có tính phá huỷ đặt `disable-model-invocation: true` — một yêu cầu kiểu "dọn dẹp
+Ba skill có đặc quyền đặt `disable-model-invocation: true` — một yêu cầu kiểu "dọn dẹp
 knowledge base" **không** đồng nghĩa với cho phép chạy chúng.
 
 ### Lớp nhắc nhận thức
@@ -573,7 +582,7 @@ hai mặc định đã khoá.
 scripts/sagctl/      engine — logic ghi, sàn an toàn, routing, audit
 scripts/sagw_server.py   MCP write server mỏng bọc engine (6 tool)
 scripts/install-shim.py  đặt `sagctl` lên PATH, tạo ~/.sagctl/
-skills/              5 skill dạy dùng knowledge base đúng cách
+skills/              7 skill: setup, status, và cách dùng knowledge base đúng
 commands/            slash command /sag-publish
 hooks/               nhắc nhận thức + mint token thủ công
 adapters/            cấu hình cài đặt riêng từng agent tool (claude-code, hermes, codex)

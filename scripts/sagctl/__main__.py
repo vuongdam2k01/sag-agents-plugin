@@ -54,8 +54,78 @@ def cmd_login(args):
     if not token:
         print("Error: login response has no access_token/token", file=sys.stderr)
         return 1
+    if args.print_token:
+        # Minting the READ token: it must reach the agent's environment
+        # (SAG_READ_TOKEN), not ~/.sagctl/credentials.json, which is the write
+        # token's only home (S12). SAG's JWT carries no role/scope, so this split
+        # limits the blast radius of an agent-side leak — it does not limit what
+        # the leaked token can do.
+        print(token)
+        return 0
     config.Credentials(args.profile).set(url=args.url, write_token=token)
     print(f"Saved credentials for profile '{args.profile}' at {config.credentials_path()}")
+    return 0
+
+
+def cmd_setup_probe(args):
+    """Measure the instance instead of trusting the defaults baked in from sag.home.
+
+    `key_format` decides every document key. SPEC S2 locks it to `flat` on the
+    strength of selftest S1 against ONE instance, and says in as many words to
+    re-verify before provisioning a new source. Skipping that check fails
+    silently: keys stop matching, `find_existing_by_key` never finds the previous
+    document, and every publish adds a duplicate instead of replacing.
+    """
+    from . import selftest
+
+    client = SagClient(base_url=args.url, token=args.token)
+    out: dict = {"url": args.url.rstrip("/")}
+
+    try:
+        out["capabilities"] = client.capabilities()
+        out["reachable"] = True
+    except SagApiError as e:
+        out["reachable"] = False
+        out["error"] = str(e)
+        _print_json(out)
+        return 3
+
+    s1 = selftest.case_s1_filename_roundtrip(client)
+    # S1 passes when the round-trip preserves the path separator, i.e. `path` is
+    # usable. It failing is the normal case and is what makes `flat` the default.
+    out["key_format"] = "path" if s1.passed else "flat"
+    out["key_format_evidence"] = s1.detail
+
+    if args.full:
+        s4 = selftest.case_s4_delete_semantics(client)
+        out["replace_strategy"] = "delete_first" if s4.passed else "upload_then_delete"
+        out["replace_strategy_evidence"] = s4.detail
+        s17 = selftest.case_s17_mcp_read_scoping(client)
+        out["mcp_read_scoping"] = {
+            "verified": s17.passed,
+            "detail": s17.detail,
+        }
+    else:
+        out["replace_strategy"] = "delete_first"
+        out["replace_strategy_evidence"] = "not measured — run with --full (S4) to confirm on this instance"
+        out["mcp_read_scoping"] = {"verified": None, "detail": "not measured — run with --full (S17)"}
+
+    out["suggested_manifest"] = {
+        "source_id": "<fill in: sagctl source create \"<name>\" or an existing source_id>",
+        "key_format": out["key_format"],
+        "require": "committed",
+        "canonical_branch": "main",
+        "min_confidence": 0.8,
+        "criteria": [],
+        "deny_paths": [],
+        "ask_paths": [],
+        "include": ["docs/**/*.md"],
+        "exclude": [],
+        "max_files": 50,
+        "max_publishes_per_day": 30,
+        "stale_branch_days": 14,
+    }
+    _print_json(out)
     return 0
 
 
@@ -380,8 +450,33 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--name", required=True)
     sp.add_argument("--email", default=None)
     sp.add_argument("--password", default=None)
+    sp.add_argument(
+        "--print-token",
+        action="store_true",
+        help="print the token instead of saving it — use to mint the READ token for "
+        "SAG_READ_TOKEN; the write token is the one that belongs in ~/.sagctl/ (S12)",
+    )
     add_profile(sp)
     sp.set_defaults(func=cmd_login)
+
+    sp = sub.add_parser(
+        "setup", help="first-run helpers — measure an instance before provisioning against it"
+    )
+    setup_sub = sp.add_subparsers(dest="setup_cmd", required=True)
+    sp2 = setup_sub.add_parser(
+        "probe",
+        help="verify a SAG instance and report the manifest defaults IT implies "
+        "(key_format from S1, replace strategy from S4)",
+    )
+    sp2.add_argument("--url", required=True)
+    sp2.add_argument("--token", required=True)
+    sp2.add_argument(
+        "--full",
+        action="store_true",
+        help="also run S4 (delete semantics) and S17 (MCP read scoping) — slower, creates "
+        "and deletes temporary sources",
+    )
+    sp2.set_defaults(func=cmd_setup_probe)
 
     sp = sub.add_parser("whoami"); add_profile(sp); sp.set_defaults(func=cmd_whoami)
     sp = sub.add_parser("health"); add_profile(sp); sp.set_defaults(func=cmd_health)
