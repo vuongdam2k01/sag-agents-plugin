@@ -428,10 +428,30 @@ asserting it: two temporary sources, a marker document in A only, then `list_doc
 through a client scoped to B. Automated via `mcp_client.py`, a minimal hand-rolled
 streamable-http/SSE client (no SDK), same approach that produced the S15 result.
 
-> **S17 has NOT been run against a live instance yet.** Until it has, the scoped url is an
-> unverified mitigation. If S17 reports `leak=True`, `?source_id=` is only a default and
-> not a boundary, and the README/SPEC wording above must be corrected rather than the
-> result explained away.
+**S17 result on `sag.home` (2026-08-01, run from a second host):**
+
+```text
+probe visible via source-A-scoped url:                    True
+A's document reachable through the source-B-scoped url:   False   <- no content leak
+list_sources through the scoped url shows other sources:  True    <- metadata leaks
+```
+
+The mitigation is **stronger than claimed for content, incomplete for metadata**, and the
+wording above is corrected accordingly rather than left generous:
+
+- `?source_id=` **is** enforced by the server for document access. An agent scoped to A
+  cannot pull A's documents through a url scoped to B. This is a real boundary for
+  content, not merely a default — better than the "casual retrieval only" framing this
+  amendment originally used.
+- `list_sources` still returns **every** source on the instance. An agent scoped to
+  project A can enumerate the names and ids of the other nine projects. Source names are
+  frequently the project names, so treat them as disclosed to every agent on the instance.
+- Neither result changes the G1 ceiling: the fleet shares one read token, so an agent that
+  constructs an unscoped url reaches everything regardless. Scoping constrains the tools
+  the agent is given, not what its credential can do.
+
+Re-run `sagctl setup probe --url <URL> --token <TOKEN> --full` on any new instance — this
+result describes `sag.home`, not SAG in general.
 
 ---
 

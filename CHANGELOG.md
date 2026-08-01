@@ -62,6 +62,15 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
     an unverified mitigation.
   - 13 new tests covering url derivation, merge-target marking, agent identity tagging,
     and that no write token ever appears in a generated config (S12).
+- **S17 measured on a live instance (2026-08-01, `sag.home`).** `?source_id=` **is**
+  enforced by the server for document access — a client scoped to source B cannot reach
+  source A's documents. `list_sources` however still returns every source on the instance,
+  so an agent can enumerate other projects' names and ids: content is separated, metadata
+  is not. SPEC A2 and both READMEs are corrected to state this precisely instead of the
+  original "casual retrieval only" framing, which understated the content guarantee and
+  said nothing about the metadata leak. The G1 ceiling is unchanged — one shared read token
+  still reaches an unscoped url. Same run confirmed `key_format=flat` (S1) and synchronous
+  DELETE (S4) on a second host.
 - **Onboarding skills — `/sag-setup` and `sag-status`.** Setup is order-dependent and has
   a verification gate that documentation alone does not enforce.
   - `sag-setup` (`disable-model-invocation: true`, human-triggered only) branches into
