@@ -39,6 +39,18 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
   - 4 new tests, including a direct regression for the exact failure observed live
     (an assessment shaped exactly like the skill's own example must validate).
 
+- **`criteria_ack` "has teeth" claim (SPEC S6) only checked non-emptiness, not real ids.**
+  Found by a follow-up review pass after the bug above: `routing.decide()` accepted any
+  non-empty `criteria_ack` list, including ids that don't exist anywhere in the
+  manifest's `criteria`. An empty ack and a fabricated one are the same failure mode —
+  neither proves the agent read the manifest's actual criteria — but only the empty case
+  was being caught. Now a `criteria_ack` is only "valid" if at least one entry matches a
+  real criterion id from the manifest; an ack containing only unknown ids is treated the
+  same as an empty one (queued, not auto-published). Partial-but-real coverage still
+  autos, matching the pre-existing "non-empty, not full-coverage" semantic — this closes
+  the fabrication gap without changing that. Both MCP tool schemas now tell the model
+  `criteria_ack` must reference real manifest ids. 2 new tests.
+
 - **`sagctl adapter-emit --write --force` could destroy a real `.claude/settings.json`
   with no backup.** Confirmed in the field (2026-08-01): a user's project settings, full
   of unrelated hand-tuned permissions/hooks/env, was silently overwritten by the generated

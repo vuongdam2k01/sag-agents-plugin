@@ -143,7 +143,15 @@ def build_server() -> McpServer:
                             "retrieval_fit": {"type": "object", "properties": {"pass": {"type": "boolean"}, "why": {"type": "string"}}},
                             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                             "rationale": {"type": "string"},
-                            "criteria_ack": {"type": "array", "items": {"type": "string"}},
+                            "criteria_ack": {
+                                "type": "array", "items": {"type": "string"},
+                                "description": (
+                                    "ids of the manifest's criteria you actually read and applied "
+                                    "(from .sag-sync.json's criteria[].id) — not a free-form note. An "
+                                    "id that does not match a real criterion is treated the same as an "
+                                    "empty list."
+                                ),
+                            },
                         },
                         "required": ["verdict", "durable", "audience", "retrieval_fit", "confidence", "rationale"],
                     },
@@ -205,7 +213,15 @@ def build_server() -> McpServer:
                             "retrieval_fit": {"type": "object", "properties": {"pass": {"type": "boolean"}, "why": {"type": "string"}}},
                             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                             "rationale": {"type": "string"},
-                            "criteria_ack": {"type": "array", "items": {"type": "string"}},
+                            "criteria_ack": {
+                                "type": "array", "items": {"type": "string"},
+                                "description": (
+                                    "ids of the manifest's criteria you actually read and applied "
+                                    "(from .sag-sync.json's criteria[].id) — not a free-form note. An "
+                                    "id that does not match a real criterion is treated the same as an "
+                                    "empty list."
+                                ),
+                            },
                         },
                         "required": ["verdict", "durable", "audience", "retrieval_fit", "confidence", "rationale"],
                     },

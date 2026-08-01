@@ -73,12 +73,20 @@ def decide(
         return RouteDecision(Route.QUEUE, "ask_paths matched")
 
     criteria_available = manifest.get("criteria") or []
+    available_ids = {c["id"] for c in criteria_available}
     ack = assessment.get("criteria_ack") or []
-    if criteria_available and not ack:
+    # "Has teeth" means the ack must reference a REAL criterion id, not merely be
+    # non-empty. An empty list and a list of fabricated ids ("i-made-this-up") are
+    # the same failure mode — neither proves the agent read the manifest's actual
+    # criteria — so both fall through to QUEUE the same way (found by review,
+    # 2026-08-01: the previous check only tested `not ack`, so any non-empty
+    # criteria_ack passed regardless of whether its ids existed anywhere).
+    valid_ack = [a for a in ack if a in available_ids]
+    if criteria_available and not valid_ack:
         return RouteDecision(
             Route.QUEUE,
-            "manifest has criteria but criteria_ack is empty — unclear whether the agent read "
-            "the criteria, not auto (REVIEW-OPUS: 'criteria_ack has teeth')",
+            "manifest has criteria but criteria_ack is empty or references no real criterion id "
+            "— unclear whether the agent read the criteria, not auto (REVIEW-OPUS: 'criteria_ack has teeth')",
         )
 
     confidence = assessment.get("confidence", 0.0)
