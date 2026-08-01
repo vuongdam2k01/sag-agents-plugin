@@ -80,8 +80,12 @@ def _claude_mcp_json(source_id: str | None) -> str:
                 "headers": {"Authorization": "Bearer ${SAG_READ_TOKEN}"},
             },
             "sagw": {
-                "command": "python",
-                "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/sagw_server.py"],
+                # `sagctl`, not an interpreter name: Ubuntu ships only `python3`,
+                # python.org on Windows ships only `python`, so any static config
+                # naming one is broken somewhere by construction. The shim has
+                # sys.executable baked in.
+                "command": "sagctl",
+                "args": ["serve-mcp"],
                 "env": {
                     "SAGCTL_AGENT": "claude-code",
                     "SAGCTL_STATE_URL": "${SAGCTL_STATE_URL}",
@@ -138,8 +142,9 @@ mcp_servers:
       # allow-all — the server only has 8 read tools, no need for an include list
 
   sagw:
-    command: "python"
-    args: ["{plugin_root}/scripts/sagw_server.py"]
+    # `sagctl` (the PATH shim), never an interpreter name — see adapters_emit.py.
+    command: "sagctl"
+    args: ["serve-mcp"]
     env:
       SAGCTL_AGENT: "hermes:${{HERMES_PROFILE_NAME}}"
       # Fleet-shared audit/queue/cost (SPEC amendment A1). Omit both to keep state
@@ -200,7 +205,7 @@ profiles:
 # -- codex -------------------------------------------------------------------
 
 
-def _emit_codex(source_id: str | None, plugin_root: str) -> list[EmittedFile]:
+def _emit_codex(source_id: str | None) -> list[EmittedFile]:
     toml = f"""# {MARKER_BEGIN.format(version=__version__)}
 # {_scope_note(source_id)}
 [mcp_servers.sag]
@@ -208,8 +213,9 @@ url = "{_read_url(source_id)}"
 headers = {{ Authorization = "Bearer ${{SAG_READ_TOKEN}}" }}
 
 [mcp_servers.sagw]
-command = "python"
-args = ["{plugin_root}/scripts/sagw_server.py"]
+# `sagctl` (the PATH shim), never an interpreter name — see adapters_emit.py.
+command = "sagctl"
+args = ["serve-mcp"]
 env = {{ SAGCTL_AGENT = "codex", SAGCTL_STATE_URL = "${{SAGCTL_STATE_URL}}", SAGCTL_STATE_TOKEN = "${{SAGCTL_STATE_TOKEN}}" }}
 
 # Codex only gets the read role + reviewed publish (T0/T1) — no batch sync, no admin
@@ -266,7 +272,8 @@ def emit_files(
     if target == "hermes":
         return _emit_hermes(source_id, plugin_root.rstrip("/"))
     if target == "codex":
-        return _emit_codex(source_id, plugin_root.rstrip("/"))
+        # No plugin path needed: sagw runs via the shim, and Codex has no skills dir.
+        return _emit_codex(source_id)
     raise ValueError(f"invalid target: {target} (expected one of {', '.join(TARGETS)})")
 
 

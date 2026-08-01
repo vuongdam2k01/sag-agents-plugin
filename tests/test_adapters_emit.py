@@ -60,21 +60,25 @@ class TestScopedUrls(unittest.TestCase):
                 self.assertNotIn("SAG_WRITE_TOKEN", text)
                 self.assertNotIn("write_token", text)
 
-    def test_plugin_root_is_substituted_for_hermes_and_codex(self):
-        for target in ("hermes", "codex"):
-            with self.subTest(target=target):
-                text = adapters_emit.emit(target, source_id="s", plugin_root="/srv/sag-plugin/")
-                self.assertIn("/srv/sag-plugin/scripts/sagw_server.py", text)
-                self.assertNotIn("//scripts", text)
+    def test_plugin_root_is_used_for_the_hermes_skills_mount(self):
+        """Since sagw runs through the shim, plugin_root's only remaining job is
+        pointing Hermes at skills/ — a trailing slash must not produce `//skills`."""
+        text = adapters_emit.emit("hermes", source_id="s", plugin_root="/srv/sag-plugin/")
+        self.assertIn("- /srv/sag-plugin/skills", text)
+        self.assertNotIn("//skills", text)
 
-    def test_claude_code_uses_the_plugin_root_variable_not_a_path(self):
-        """Claude Code resolves ${CLAUDE_PLUGIN_ROOT} itself; a baked path would break
-        on every other machine."""
+    def test_codex_needs_no_plugin_path_at_all(self):
+        text = adapters_emit.emit("codex", source_id="s", plugin_root="/srv/sag-plugin")
+        self.assertNotIn("/srv/sag-plugin", text)
+
+    def test_claude_code_invokes_sagw_through_the_shim(self):
+        """No plugin path and no interpreter name: `sagctl serve-mcp` works the same on
+        Ubuntu (python3 only) and Windows (python only), because the shim has
+        sys.executable baked in at install time."""
         files = adapters_emit.emit_files("claude-code", source_id="s")
         mcp = json.loads(next(f for f in files if f.path == ".mcp.json").content)
-        self.assertEqual(
-            mcp["mcpServers"]["sagw"]["args"], ["${CLAUDE_PLUGIN_ROOT}/scripts/sagw_server.py"]
-        )
+        self.assertEqual(mcp["mcpServers"]["sagw"]["command"], "sagctl")
+        self.assertEqual(mcp["mcpServers"]["sagw"]["args"], ["serve-mcp"])
 
     def test_settings_block_comes_from_the_static_adapter_file(self):
         files = adapters_emit.emit_files("claude-code", source_id="s")

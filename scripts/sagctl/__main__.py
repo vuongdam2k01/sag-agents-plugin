@@ -378,6 +378,66 @@ def _resolve_source_id(args) -> str | None:
         return None
 
 
+def cmd_serve_mcp(args):
+    """Run the sagw MCP write server over stdio.
+
+    Exists so agent-tool configs invoke `sagctl serve-mcp` instead of
+    `python <path>/sagw_server.py`. There is no interpreter name that works on
+    every platform — Ubuntu ships only `python3`, python.org on Windows ships only
+    `python` — so a static config that names one is broken somewhere by
+    construction. The shim created by install-shim.py has `sys.executable` baked
+    in, so routing through it removes the guess entirely.
+    """
+    import runpy
+    from pathlib import Path as _Path
+
+    server = _Path(__file__).resolve().parents[1] / "sagw_server.py"
+    if not server.is_file():
+        print(f"sagw_server.py not found at {server}", file=sys.stderr)
+        return 1
+    sys.argv = [str(server)]
+    runpy.run_path(str(server), run_name="__main__")
+    return 0
+
+
+HOOK_SCRIPTS = {
+    "post-tool-use": "post_tool_use_nudge.py",
+    "session-end": "session_end_backstop.py",
+    "user-prompt-submit": "user_prompt_submit_mint_token.py",
+}
+
+
+def cmd_hook(args):
+    """Run a plugin hook. Same reason as serve-mcp — hooks.json must not name an
+    interpreter. A hook that dies because `python` is not a command fails SILENTLY:
+    the agent keeps working and simply never gets told a file went unassessed."""
+    import runpy
+    from pathlib import Path as _Path
+
+    script = _Path(__file__).resolve().parents[2] / "hooks" / HOOK_SCRIPTS[args.hook_name]
+    if not script.is_file():
+        print(f"hook script not found at {script}", file=sys.stderr)
+        return 1
+    sys.argv = [str(script)]
+    runpy.run_path(str(script), run_name="__main__")
+    return 0
+
+
+def cmd_version(args):
+    """Report the engine path as well as the version. On Claude Code the plugin is
+    unpacked into a VERSIONED cache directory, so a shim created against one
+    version keeps running it after an upgrade — silently. Printing the path is how
+    that gets noticed."""
+    from pathlib import Path as _Path
+
+    _print_json({
+        "version": __version__,
+        "engine_path": str(_Path(__file__).resolve().parents[1]),
+        "python": sys.executable,
+    })
+    return 0
+
+
 def cmd_adapter_emit(args):
     from . import adapters_emit
 
@@ -572,6 +632,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--body", default=None, help="JSON string")
     add_profile(sp)
     sp.set_defaults(func=cmd_api)
+
+    sp = sub.add_parser("serve-mcp", help="run the sagw MCP write server over stdio")
+    sp.set_defaults(func=cmd_serve_mcp)
+
+    sp = sub.add_parser("hook", help="run a plugin hook (used by hooks.json)")
+    sp.add_argument("hook_name", choices=sorted(HOOK_SCRIPTS))
+    sp.set_defaults(func=cmd_hook)
+
+    sp = sub.add_parser("version", help="engine version, install path and interpreter")
+    sp.set_defaults(func=cmd_version)
 
     sp = sub.add_parser(
         "adapter-emit",
