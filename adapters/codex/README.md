@@ -1,15 +1,19 @@
 # Codex Adapter
 
-Codex has no directly compatible skill/plugin format — the configuration is
-**generated** (not a static file copied by hand like Claude Code/Hermes) so it
-can embed a version marker, letting `sagctl doctor` detect when Codex is
-running a config block that has fallen out of date with the plugin.
+Codex has no directly compatible skill/plugin format, so its configuration is
+generated — as all three adapters now are. The Codex output additionally embeds a
+version marker, letting `sagctl doctor` detect when Codex is running a config block
+that has fallen out of date with the plugin.
 
 ```bash
-sagctl adapter-emit codex --out /tmp/sag-codex-block.txt
+sagctl adapter-emit codex --plugin-root /opt/agent-skills/sag-agents-plugin
 ```
 
-The command prints two parts, separated by `---`:
+Run it from inside the repo being wired up: `source_id` comes from that repo's
+`.sag-sync.json`, so the read MCP url is scoped to the project the agent works in
+(`${SAG_URL}/mcp/?source_id=<id>`) — see [SPEC amendment A2](../../docs/SPEC.md).
+
+The command prints two artifacts, each under a `# ===== <file> =====` header:
 
 1. The block to insert into Codex's `config.toml` — `[mcp_servers.sag]` (read,
    auto-approve) and `[mcp_servers.sagw]` (write, on-request).

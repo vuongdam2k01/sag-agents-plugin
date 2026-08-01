@@ -6,18 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Because [docs/SPEC.md](docs/SPEC.md) is the canonical contract, entries that change
-behavior cite the spec section they touch (S1–S12).
+behavior cite the spec section they touch (S1–S12) or the amendment that revises it
+(A1, A2, …).
 
 ## [Unreleased]
 
 ### Added
 
+- **Fleet-shared state backend (SPEC amendment A1, amends S1).** Audit, queue, and cost
+  counters now resolve through `sagctl/state.py` instead of touching `~/.sagctl/` files
+  directly. `SAGCTL_STATE_URL` unset keeps the existing local files byte-for-byte — no
+  migration, no behaviour change for a single-machine install. Set it (plus
+  `SAGCTL_STATE_TOKEN`) and the whole agent fleet shares one cost cap, one queue, and one
+  audit log.
+  - Rationale: S1 put that state on local disk to satisfy REVIEW-OPUS F5 ("config inside
+    the workspace = the agent grants itself permissions"), which constrains *write reach*,
+    not *storage medium*. With one agent per host, `max_publishes_per_day` silently became
+    N × the manifest value, an item queued on host A could never be approved from host B,
+    and `doctor`'s fail-rate by `agent × route` saw 1/N of the history.
+  - `scripts/sagstate_server.py` — stdlib-only reference service, bearer-token auth,
+    per-source locking, refuses a non-loopback bind without `SAGSTATE_TOKEN`.
+  - Backend operations are atomic by contract (`cost_bump`, `queue_set_status`) rather
+    than get/set pairs, so concurrent hosts cannot lose a counter update or double-approve
+    a queue item.
+  - The wire addresses sources by `sha256(source_id)[:12]`, so a real `source_id` never
+    reaches a URL, an access log, or a proxy trace.
+  - `sagctl doctor` reports the active backend and its reachability — the fastest way to
+    catch one host still on `local` while the rest of the fleet is on `http`.
+  - Trust boundary unchanged: the service is dumb storage holding no policy. The manifest,
+    the deterministic floor, and routing all still run on the agent host. Still G1.
+  - 27 new tests, including two hosts racing to approve the same queue item and four hosts
+    concurrently bumping one counter, run against a real in-process server.
+- **Generated agent config with a scoped read MCP (SPEC amendment A2, amends S8).**
+  `sagctl adapter-emit <target>` now resolves `source_id` from the manifest and generates
+  the full config for all three targets, instead of pointing at static snippets to copy by
+  hand.
+  - Rationale: S8 specified the write side precisely and said nothing about reads, so
+    `.mcp.json` shipped an unscoped `${SAG_URL}/mcp/`. With S11 (no isolation between
+    identities) and one shared read token, every agent could list and search every source
+    on the instance regardless of which project it worked in. Invisible on one project;
+    with N projects it means no read-side scope at all.
+  - The generated read url carries `?source_id=<id>` (the form `GET /sources/{id}/mcp`
+    returns, confirmed in S15). `source_id` stays declared exactly once, in Git — N
+    projects × M hosts no longer means N×M hand-maintained copies across three file formats.
+  - Emitting without a resolvable manifest still works but warns on stderr and marks the
+    output unscoped. An unscoped config must be a visible choice, not a silent default.
+  - `--write DIR` places the files; `settings.json` / `config.yaml` / `config.toml` are
+    merge-targets and are printed rather than clobbered unless `--force`.
+  - Worth stating plainly: this is defence in depth, not a boundary. The same read token
+    still reaches an unscoped url. Read separation as a real boundary is still option C.
+  - New selftest case **S17** measures the claim rather than asserting it — two sources, a
+    marker document in one, `list_documents` through a client scoped to the other —
+    automated via `mcp_client.py`, a minimal hand-rolled streamable-http/SSE MCP client.
+    **S17 has not yet been run against a live instance**; until it has, the scoped url is
+    an unverified mitigation.
+  - 13 new tests covering url derivation, merge-target marking, agent identity tagging,
+    and that no write token ever appears in a generated config (S12).
+- `adapters/claude-code/README.md` and `adapters/hermes/README.md`, so all three adapter
+  directories document the generator rather than shipping snippets to copy.
 - Open-source project scaffolding: `LICENSE` (MIT), `CONTRIBUTING.md`,
   `CODE_OF_CONDUCT.md`, `SECURITY.md`, this changelog, GitHub issue and pull-request
   templates, and a CI workflow running the unit suite on Ubuntu and Windows across
   Python 3.11–3.13.
 - Full English and Vietnamese READMEs covering architecture, the manifest, the publish
   pipeline, the MCP tool surface, the CLI, the security model, and the design principles.
+
+### Removed
+
+- `adapters/hermes/config.example.yaml` — superseded by `sagctl adapter-emit hermes`.
+  Keeping a static snippet beside a generator that produces the same content is the exact
+  drift the generator exists to prevent (REVIEW-OPUS F3). `adapters/claude-code/settings-rules.json`
+  stays: the generator *reads* it, so it is a source of truth rather than a second copy.
 
 ## [0.1.0] — 2026-07-31
 

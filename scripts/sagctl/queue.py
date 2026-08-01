@@ -6,39 +6,15 @@ enabled, granted only to reviewer/orchestrator, and is not part of default ops.
 """
 from __future__ import annotations
 
-import json
 import secrets
 import time
 from pathlib import Path
 
-from . import audit, config
+from . import audit, state
 
 
 class QueueError(RuntimeError):
     pass
-
-
-def _load(source_id: str) -> list[dict]:
-    path = config.queue_path(source_id)
-    if not path.exists():
-        return []
-    items = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            items.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return items
-
-
-def _save(source_id: str, items: list[dict]) -> None:
-    path = config.queue_path(source_id)
-    with path.open("w", encoding="utf-8") as f:
-        for item in items:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
 def enqueue(source_id: str, *, path: str, key: str, relpath: str, assessment: dict | None, reason: str, agent: str) -> dict:
@@ -54,36 +30,33 @@ def enqueue(source_id: str, *, path: str, key: str, relpath: str, assessment: di
         "status": "pending",
         "created_at": time.time(),
     }
-    items = _load(source_id)
-    items.append(item)
-    _save(source_id, items)
+    state.queue_add(source_id, item)
     audit.append(source_id, {"event": "queued", "queue_id": item["id"], "key": key, "reason": reason, "agent": agent})
     return item
 
 
 def list_pending(source_id: str) -> list[dict]:
-    return [i for i in _load(source_id) if i["status"] == "pending"]
+    return [i for i in state.queue_list(source_id) if i["status"] == "pending"]
 
 
 def find(source_id: str, queue_id: str) -> dict | None:
-    for item in _load(source_id):
+    for item in state.queue_list(source_id):
         if item["id"] == queue_id:
             return item
     return None
 
 
 def _update_status(source_id: str, queue_id: str, status: str, *, reviewer: str) -> dict:
-    items = _load(source_id)
-    for item in items:
-        if item["id"] == queue_id:
-            if item["status"] != "pending":
-                raise QueueError(f"queue item {queue_id} is already in state '{item['status']}'")
-            item["status"] = status
-            item["reviewed_by"] = reviewer
-            item["reviewed_at"] = time.time()
-            _save(source_id, items)
-            return item
-    raise QueueError(f"queue item {queue_id} not found")
+    """Compare-and-set on `pending`.
+
+    The check and the write happen inside the backend, not here — with a fleet
+    sharing one queue, "read it, see pending, write approved" from two hosts
+    would double-approve the same item.
+    """
+    try:
+        return state.queue_set_status(source_id, queue_id, status, reviewer)
+    except state.StateError as e:
+        raise QueueError(str(e)) from None
 
 
 def approve(source_id: str, queue_id: str, *, reviewer: str, wait: bool = False) -> dict:

@@ -166,7 +166,8 @@ published**:
   entry + ask permission.
 - Config/audit/queue/cost-counter: `~/.sagctl/<sha256(source_id)[:12]>/`. The engine
   **aborts** if it finds `sagctl.config.json|queue.jsonl|audit.jsonl` in the repo (the
-  manifest itself belongs in the repo).
+  manifest itself belongs in the repo). **⇒ amended by A1 below** — the *location* is no
+  longer pinned to the local filesystem; the "never in the repo" rule is unchanged.
 
 ## S2. Identity & hashing
 
@@ -320,6 +321,117 @@ fixed **7-day** lifetime, no logout/revoke/refresh endpoint. A leaked token **ca
 revoked early** — the direct consequence: write the token to exactly one place
 (`~/.sagctl/credentials.json`, `0600` permissions), and treat rotation as re-login +
 manual redistribution on a cycle shorter than 7 days for sensitive environments.
+
+---
+
+## Amendments to the locked spec
+
+### A1. State location is pluggable — `local` (default) | `http` (fleet-shared)
+
+**Amends S1.** Decided by the project owner after the single-machine assumption behind
+S1 was found not to hold for the real deployment.
+
+**What was wrong.** S1 placed audit/queue/cost at `~/.sagctl/<sha256(source_id)[:12]>/`.
+The requirement that produced that location is REVIEW-OPUS F5 — *"config inside the
+workspace = the agent grants itself permissions"* — which constrains **write reach**, not
+**storage medium**. On one machine the two coincide, so the distinction never surfaced.
+Across a fleet where each agent runs on its own host they diverge, and every guarantee
+S1 attached to those three files silently degrades:
+
+| File | What S1 promises | What actually happens across N hosts |
+|---|---|---|
+| `cost.json` | `max_publishes_per_day` is the budget | the budget becomes N × the manifest value |
+| `queue.jsonl` | S6 routes low-confidence work to human review | an item queued on host A **cannot be approved from host B** |
+| `audit.jsonl` | S10 post-hoc review + `doctor` fail-rate by `agent × route` | each host sees 1/N of the history; the statistic is meaningless |
+
+Note this degrades *policy*, not *correctness of publishing*: `publish_one()` never trusts
+local state — it lists documents by key on SAG and replaces (SAG is the inventory source
+of truth), so dedupe and replace stay correct no matter how many hosts participate.
+
+**The amendment.** All access to those three goes through `state.py`, which resolves a
+backend from the environment:
+
+```text
+SAGCTL_STATE_URL unset  → LocalBackend  — the S1 files, byte-for-byte, no migration
+SAGCTL_STATE_URL set    → HttpBackend   — one fleet-shared store (SAGCTL_STATE_TOKEN)
+```
+
+The "never in the repo" rule of S1 is **unchanged** — `assert_no_repo_state_leak` and
+`FORBIDDEN_IN_REPO` are untouched, and a remote store satisfies the F5 requirement more
+strictly than a local file the agent's own OS user can write.
+
+**Atomicity is part of the contract, not an implementation detail.** The backend exposes
+`cost_bump` and `queue_set_status` rather than get/set pairs: two hosts doing
+read-then-write on a counter is a lost update, and two hosts reading `status == pending`
+before either writes would double-approve the same queue item. Both operations resolve
+inside the backend, under a lock.
+
+**Reference implementation**: `scripts/sagstate_server.py` — stdlib-only, same zero-
+dependency rule as the engine, bearer-token auth, per-source lock, and it refuses to bind
+a non-loopback address without `SAGSTATE_TOKEN`.
+
+**Trust boundary — unchanged, and this service does not move it.** The state service is
+dumb storage holding no policy. The manifest still decides what may be published, `gate.py`
+still runs the deterministic floor, `routing.py` still decides auto/queue/reject.
+Compromising the state service lets an attacker forge audit history and reset the cost
+counter; it does **not** let them publish anything the floor would have rejected. This is
+still G1 (see S0) — a hard boundary is still option C, still out of phase 1.
+
+**Addressing.** The wire uses `sha256(source_id)[:12]` — the same namespace key as the
+local layout — so a real `source_id` never appears in a URL, an access log, or a proxy
+trace.
+
+**Diagnostics.** `sagctl doctor` reports the active backend. On a fleet, one host
+reporting `local` while another reports `http` means they are **not** sharing state, even
+though both point at the same SAG source.
+
+### A2. Agent-side config is generated from the manifest; read MCP is scoped
+
+**Amends S8** (adds the read side) and replaces the "static snippets, copy by hand"
+half of Q7/DESIGN.
+
+**What was wrong.** S8 specifies write permissions precisely — by MCP tool identifier,
+ops taxonomy, default vs explicitly-enabled. It says nothing about the read side, and
+`.mcp.json` shipped `${SAG_URL}/mcp/` with no `source_id`. Combined with S11 (no isolation
+between identities) and S12 (one read token for the whole fleet), the consequence is that
+**every agent can list and search every source on the instance**, regardless of which
+project it works in. On a one-project instance that is invisible. On N projects it means
+the plugin has no read-side scope at all.
+
+The second half of the problem is mechanical: scoping requires a `source_id` in the agent
+tool's own config — `.mcp.json`, `config.yaml`, `config.toml` — none of which reads
+`.sag-sync.json`. With N projects × M agent hosts that is N×M hand-maintained copies in
+three file formats. Hand-copying at that scale does not stay correct.
+
+**The amendment.**
+
+1. `source_id` remains declared **exactly once**, in the manifest, in Git.
+2. `sagctl adapter-emit <target>` resolves it from the manifest found at cwd (or
+   `--manifest` / `--source-id`) and **generates** the agent-side config for all three
+   targets, with the read MCP pointed at `${SAG_URL}/mcp/?source_id=<id>` — the URL form
+   `GET /sources/{id}/mcp` returns, confirmed in S15.
+3. Emitting without a resolvable `source_id` still works but **says so loudly**, on stderr
+   and in the file header. An unscoped config must be a visible choice, never a silent
+   default.
+4. `--write DIR` places the files. Artifacts that normally already hold unrelated content
+   (`settings.json`, `config.yaml`, `config.toml`) are marked merge-targets and are never
+   written blind — they are printed for a human to merge unless `--force`.
+
+**What this is worth, stated honestly.** Defence in depth, not a boundary. The same read
+token still reaches an unscoped URL, and S11 means the server enforces nothing. It stops
+an agent working in project A from casually retrieving project B's knowledge; it does not
+stop one that is trying to. Read-side separation as a real boundary remains option C, out
+of phase 1 — unchanged by this amendment.
+
+**Verification.** New non-blocking selftest case **S17** measures the claim instead of
+asserting it: two temporary sources, a marker document in A only, then `list_documents`
+through a client scoped to B. Automated via `mcp_client.py`, a minimal hand-rolled
+streamable-http/SSE client (no SDK), same approach that produced the S15 result.
+
+> **S17 has NOT been run against a live instance yet.** Until it has, the scoped url is an
+> unverified mitigation. If S17 reports `leak=True`, `?source_id=` is only a default and
+> not a boundary, and the README/SPEC wording above must be corrected rather than the
+> result explained away.
 
 ---
 
