@@ -129,7 +129,13 @@ def build_server() -> McpServer:
                     "path": {"type": "string", "description": "file path within the repo (committed)"},
                     "assessment": {
                         "type": "object",
-                        "description": "self-assessment — see docs/SPEC.md §S5",
+                        "description": (
+                            "self-assessment — see docs/SPEC.md §S5. Do not include 'path', "
+                            "'source_id', or 'commit' — the engine fills those in itself from "
+                            "values it already has (the 'path' argument above, the resolved "
+                            "manifest, and git), and never trusts what a model would provide "
+                            "for them."
+                        ),
                         "properties": {
                             "verdict": {"type": "string", "enum": ["knowledge", "not-knowledge", "unsure"]},
                             "durable": {"type": "object", "properties": {"pass": {"type": "boolean"}, "why": {"type": "string"}}},
@@ -138,8 +144,6 @@ def build_server() -> McpServer:
                             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                             "rationale": {"type": "string"},
                             "criteria_ack": {"type": "array", "items": {"type": "string"}},
-                            "source_id": {"type": "string"},
-                            "commit": {"type": "string"},
                         },
                         "required": ["verdict", "durable", "audience", "retrieval_fit", "confidence", "rationale"],
                     },
@@ -188,7 +192,12 @@ def build_server() -> McpServer:
                     },
                     "assessment": {
                         "type": "object",
-                        "description": "self-assessment — see docs/SPEC.md §S5",
+                        "description": (
+                            "self-assessment — see docs/SPEC.md §S5. Do not include 'path', "
+                            "'source_id', or 'commit' — the engine fills those in itself "
+                            "('commit' is always null here since authored content has no file "
+                            "behind it) and never trusts what a model would provide for them."
+                        ),
                         "properties": {
                             "verdict": {"type": "string", "enum": ["knowledge", "not-knowledge", "unsure"]},
                             "durable": {"type": "object", "properties": {"pass": {"type": "boolean"}, "why": {"type": "string"}}},
@@ -197,8 +206,6 @@ def build_server() -> McpServer:
                             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                             "rationale": {"type": "string"},
                             "criteria_ack": {"type": "array", "items": {"type": "string"}},
-                            "source_id": {"type": "string"},
-                            "commit": {"type": ["string", "null"], "description": "null — there is no commit for authored content"},
                         },
                         "required": ["verdict", "durable", "audience", "retrieval_fit", "confidence", "rationale"],
                     },

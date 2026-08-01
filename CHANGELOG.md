@@ -13,6 +13,32 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
 
 ### Fixed
 
+- **`sag_publish`/`sag_publish_content` required three fields from the model that the
+  tool's own schema never offered and the engine never read.** Found live (2026-08-01,
+  real Claude Code session): an agent submitted a schema-valid assessment (matching the
+  skill's own canonical example) and got rejected with "missing required field: path" —
+  the MCP tool's `input_schema` never declared `path` as an assessment property at all,
+  yet server-side `validate_model_input()` required it, along with `source_id` and
+  `commit`. The agent recovered by running `git rev-parse HEAD` itself to backfill a
+  value the engine was going to compute independently anyway — `publish_one()` never
+  reads `assessment["commit"]`/`["path"]`/`["source_id"]` for anything; it always uses
+  its own authoritative `path` (the tool argument), `source_id` (the resolved manifest),
+  and `commit` (`gitutil.last_commit_touching()`).
+  - `assessment._REQUIRED_TOP` no longer includes `path`/`source_id`/`commit` — the model
+    is only ever asked for `verdict`/`durable`/`audience`/`retrieval_fit`/`confidence`/
+    `rationale`/`criteria_ack`.
+  - `assessment.enrich()` now sets `path`/`source_id`/`commit` itself, from values its
+    caller (`publish_one`/`publish_content`) already computed — overwriting anything the
+    model supplies, same treatment as `key`/`initiator` (SPEC S5, REVIEW-OPUS §2c: the
+    model doesn't get to self-report fields the engine can verify).
+  - The MCP tool schemas for `sag_publish` and `sag_publish_content` drop `source_id`/
+    `commit` from `assessment.properties` entirely and say explicitly not to include them.
+  - SPEC §S5 corrected — it already said "the engine fills in `key`, `initiator`,
+    `criteria_available`" but listed `path`/`source_id`/`commit` ambiguously alongside
+    model-supplied fields, which is exactly the gap that produced the bug.
+  - 4 new tests, including a direct regression for the exact failure observed live
+    (an assessment shaped exactly like the skill's own example must validate).
+
 - **`sagctl adapter-emit --write --force` could destroy a real `.claude/settings.json`
   with no backup.** Confirmed in the field (2026-08-01): a user's project settings, full
   of unrelated hand-tuned permissions/hooks/env, was silently overwritten by the generated
