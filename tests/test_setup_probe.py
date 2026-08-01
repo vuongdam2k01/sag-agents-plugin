@@ -131,6 +131,25 @@ class TestSetupProbe(unittest.TestCase):
         self.assertEqual(m["ask_paths"], [])
         self.assertEqual(m["criteria"], [])
 
+    def test_suggested_include_matches_the_engine_default(self):
+        """A narrower `include` here would silently decide what counts as knowledge by
+        glob: routing rejects out-of-include paths before the model is asked, and
+        `doctor --unassessed` only scans within `include`, so such files are never
+        published and never flagged."""
+        from sagctl import manifest as manifest_mod
+
+        caps, s1 = self._patch(s1_passed=False)
+        with caps, s1:
+            _, out = _run(_args())
+        self.assertEqual(out["suggested_manifest"]["include"], manifest_mod.DEFAULTS["include"])
+
+    def test_suggested_exclude_is_mechanical_noise_only(self):
+        caps, s1 = self._patch(s1_passed=False)
+        with caps, s1:
+            _, out = _run(_args())
+        for pattern in out["suggested_manifest"]["exclude"]:
+            self.assertRegex(pattern, r"node_modules|vendor|\.venv")
+
     def test_suggested_manifest_does_not_invent_a_source_id(self):
         caps, s1 = self._patch(s1_passed=False)
         with caps, s1:

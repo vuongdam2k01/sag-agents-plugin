@@ -62,6 +62,14 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
     an unverified mitigation.
   - 13 new tests covering url derivation, merge-target marking, agent identity tagging,
     and that no write token ever appears in a generated config (S12).
+- **Fixed: `setup probe` suggested a narrower `include` than the engine's own default.**
+  It proposed `docs/**/*.md` where `manifest.DEFAULTS` is `**/*.md`, which quietly decided
+  "what counts as knowledge" by glob — the assessment's job (S5/S6). The failure mode is
+  silent in both directions: `routing.decide()` rejects an out-of-include path before the
+  model is ever asked for a verdict, and `doctor --unassessed` only scans within `include`,
+  so those files are never published *and* never flagged. The suggestion now matches the
+  engine default and puts mechanical noise (`node_modules`, `vendor`, `.venv`) in `exclude`
+  where it belongs.
 - **Fixed: the plugin assumed a command named `python` existed.** Confirmed broken on a
   stock Ubuntu 24.04 (2026-08-01), which ships `python3` and no `python`: `sagw` never
   started and all four hooks died — the hooks *silently*, so the agent kept working and

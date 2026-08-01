@@ -119,8 +119,14 @@ def cmd_setup_probe(args):
         "criteria": [],
         "deny_paths": [],
         "ask_paths": [],
-        "include": ["docs/**/*.md"],
-        "exclude": [],
+        # Matches manifest.DEFAULTS. `include` is a MECHANICAL boundary (which files
+        # are even candidates), not a content filter — narrowing it here would decide
+        # "what counts as knowledge" by glob, which is the assessment's job (S5/S6).
+        # And the failure is silent: routing rejects out-of-include paths before the
+        # model is ever asked, and `doctor --unassessed` only scans within `include`,
+        # so those files are never published AND never flagged.
+        "include": manifest_mod.DEFAULTS["include"],
+        "exclude": ["**/node_modules/**", "**/vendor/**", "**/.venv/**"],
         "max_files": 50,
         "max_publishes_per_day": 30,
         "stale_branch_days": 14,
