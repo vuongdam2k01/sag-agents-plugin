@@ -6,13 +6,14 @@ frontend or a `curl` command would — no installing, no patching, no adding
 routes to the SAG source code. This server is plugin code, running as a
 separate process on the agent's machine (stdio transport).
 
-Exactly 6 tools per SPEC S8, no more:
-  sag_publish            {path, assessment}         allow — always requires an assessment
-  sag_publish_status     {path}                      allow — read-only
-  sag_sync_preview       {path}                       allow — read-only, dry-run
-  sag_reprocess          {path}                      allow
-  sag_publish_unreviewed {path, reason}              ask   — bypasses the require gate, does NOT bypass secret/deny
-  sag_unpublish          {path, reason}              ask   — the remediation path, always available
+7 tools per SPEC S8/A3:
+  sag_publish            {path, assessment}                      allow — always requires an assessment
+  sag_publish_content    {relpath, content, assessment}           allow — same rubric, no file/repo required (SPEC A3)
+  sag_publish_status     {path}                                   allow — read-only
+  sag_sync_preview       {path}                                   allow — read-only, dry-run
+  sag_reprocess          {path}                                   allow
+  sag_publish_unreviewed {path, reason}                           ask   — bypasses the require gate, does NOT bypass secret/deny
+  sag_unpublish          {path, reason}                           ask   — the remediation path, always available
 
 Everything else (sync batch, source admin, queue approve, api escape hatch)
 lives ONLY in the `sagctl` CLI — never as an MCP tool (SPEC S8).
@@ -50,6 +51,30 @@ def _handle_sag_publish(args: dict) -> dict:
     result = publish_mod.publish_one(
         Path(path),
         assessment=raw_assessment,
+        agent=AGENT_NAME,
+        trigger=args.get("trigger", "end-of-task"),
+        wait=False,
+    )
+    return result.__dict__
+
+
+def _handle_sag_publish_content(args: dict) -> dict:
+    """Publish agent-authored text — a distillation of a PDF read with a document
+    skill, a research synthesis, anything with no file and possibly no repo behind
+    it (SPEC A3). Same self-assessment rubric and the same deterministic floor as
+    `sag_publish` — what is absent is the Git clause, because there may be nothing
+    to check it against."""
+    raw_assessment = args.get("assessment")
+    if raw_assessment is None:
+        raise ValueError("assessment is required — sag_publish_content always requires a self-assessment (SPEC S5)")
+    errors = assessment_mod.validate_model_input(raw_assessment)
+    if errors:
+        raise ValueError("invalid assessment: " + "; ".join(errors))
+    result = publish_mod.publish_content(
+        args["relpath"],
+        args["content"],
+        assessment=raw_assessment,
+        derived_from=args.get("derived_from"),
         agent=AGENT_NAME,
         trigger=args.get("trigger", "end-of-task"),
         wait=False,
@@ -122,6 +147,65 @@ def build_server() -> McpServer:
                 "required": ["path", "assessment"],
             },
             handler=_handle_sag_publish,
+        )
+    )
+    server.register(
+        Tool(
+            name="sag_publish_content",
+            description=(
+                "Publish agent-authored text to the SAG knowledge base — no file and no "
+                "Git repo required. Use this to distil a document you read with a "
+                "document skill (PDF, DOCX, ...) into markdown, to publish a research "
+                "synthesis from a session with no repo behind it, or any other knowledge "
+                "you wrote yourself rather than found on disk. Requires the same "
+                "'assessment' self-assessment as sag_publish, and goes through the same "
+                "deterministic floor (secret scan, deny_paths, cost cap) — the only thing "
+                "not checked is a Git commit, because there may be none."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "relpath": {
+                        "type": "string",
+                        "description": (
+                            "a path-shaped key you choose, e.g. "
+                            "'research/2026-08-01-pricing-competitors.md' — matched against "
+                            "the manifest's include/exclude/deny_paths/ask_paths exactly like "
+                            "a real file's path would be, and encoded into the SAG key the "
+                            "same way (key_format)."
+                        ),
+                    },
+                    "content": {"type": "string", "description": "the document text (markdown recommended)"},
+                    "derived_from": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "what this was distilled from, if anything — repo paths "
+                            "(ideally 'path@blobsha'), URLs, or other SAG keys. Keeps the "
+                            "citation chain intact when the original artifact (e.g. a PDF) "
+                            "is not itself being published."
+                        ),
+                    },
+                    "assessment": {
+                        "type": "object",
+                        "description": "self-assessment — see docs/SPEC.md §S5",
+                        "properties": {
+                            "verdict": {"type": "string", "enum": ["knowledge", "not-knowledge", "unsure"]},
+                            "durable": {"type": "object", "properties": {"pass": {"type": "boolean"}, "why": {"type": "string"}}},
+                            "audience": {"type": "object", "properties": {"pass": {"type": "boolean"}, "why": {"type": "string"}}},
+                            "retrieval_fit": {"type": "object", "properties": {"pass": {"type": "boolean"}, "why": {"type": "string"}}},
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "rationale": {"type": "string"},
+                            "criteria_ack": {"type": "array", "items": {"type": "string"}},
+                            "source_id": {"type": "string"},
+                            "commit": {"type": ["string", "null"], "description": "null — there is no commit for authored content"},
+                        },
+                        "required": ["verdict", "durable", "audience", "retrieval_fit", "confidence", "rationale"],
+                    },
+                },
+                "required": ["relpath", "content", "assessment"],
+            },
+            handler=_handle_sag_publish_content,
         )
     )
     server.register(

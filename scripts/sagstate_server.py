@@ -144,6 +144,27 @@ class Store:
         self._queue_save(skey, items)
         return item
 
+    # -- provenance --
+    def provenance_load(self, skey: str) -> dict:
+        path = self._dir(skey) / "provenance.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+    def provenance_put(self, skey: str, key: str, record: dict) -> dict:
+        data = self.provenance_load(skey)
+        data[key] = record
+        (self._dir(skey) / "provenance.json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+        return record
+
+    def provenance_get(self, skey: str, key: str) -> dict | None:
+        return self.provenance_load(skey).get(key)
+
     def queue_set_status(self, skey: str, queue_id: str, status: str, reviewer: str) -> dict:
         items = self.queue_list(skey)
         for item in items:
@@ -243,6 +264,20 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("'key' is required")
                 with _lock_for(skey):
                     return 200, store.cost_bump(skey, key)
+
+        elif resource == "provenance":
+            if method == "POST" and not rest:
+                body = self._read_json()
+                key, record = body.get("key"), body.get("record")
+                if not key or not isinstance(record, dict):
+                    raise ValueError("'key' and object 'record' are required")
+                with _lock_for(skey):
+                    return 200, store.provenance_put(skey, key, record)
+            if method == "POST" and rest == ["get"]:
+                key = self._read_json().get("key")
+                if not key:
+                    raise ValueError("'key' is required")
+                return 200, {"record": store.provenance_get(skey, key)}
 
         elif resource == "queue":
             if method == "GET" and not rest:

@@ -54,6 +54,7 @@ selftest` làm (17 case thăm dò, kết quả ghi lại trong [docs/SPEC.md](do
 - [Bắt đầu nhanh](#bắt-đầu-nhanh)
 - [Cài đặt](#cài-đặt)
 - [Cấu hình: manifest](#cấu-hình-manifest)
+- [Publish không cần file, không cần repo](#publish-không-cần-file-không-cần-repo)
 - [Một lần publish diễn ra thế nào](#một-lần-publish-diễn-ra-thế-nào)
 - [MCP tools](#mcp-tools)
 - [Tham chiếu CLI](#tham-chiếu-cli)
@@ -225,7 +226,7 @@ tiên (ancestor) của commit đang được publish**:
   ],
   "deny_paths": ["docs/pricing/**"],
   "ask_paths": [],
-  "include": ["**/*.md"],
+  "include": ["docs/**/*.md"],
   "exclude": [],
   "max_files": 50,
   "max_publishes_per_day": 30,
@@ -233,10 +234,18 @@ tiên (ancestor) của commit đang được publish**:
 }
 ```
 
+`include` ở trên (`docs/**/*.md`) là lựa chọn của *repo ví dụ* này — chỉ publish thư mục
+docs — không phải mặc định của engine. Mặc định thật là `["**/*"]`: mọi định dạng SAG
+nhận (`.pdf`, `.docx`, `.csv`, `.json`, ...), không chỉ markdown. Provenance của những
+định dạng không nhét được YAML frontmatter thì nằm trong state store thay vì trong bytes
+của file — xem [Publish không cần file, không cần repo](#publish-không-cần-file-không-cần-repo).
+
 | Trường | Ý nghĩa |
 |---|---|
 | `key_format` | `flat` (mặc định) hoặc `path`. **Hãy kiểm chứng bằng `sagctl selftest --case S1`** — phần lớn instance SAG cắt tên file upload về basename, đó là lý do `flat` là mặc định. |
-| `require` | Trạng thái Git tối thiểu để được publish: `committed` (mặc định) · `pushed` · `merged`. |
+| `require` | Trạng thái Git tối thiểu để được publish: `committed` (mặc định) · `pushed` · `merged`. Chỉ áp dụng khi manifest nằm trên một repo Git thật — ngoài repo thì điều kiện này không áp dụng, không phải bị bỏ qua. |
+| `canonical_branch` | Chỉ dùng bởi `require: pushed\|merged` và bởi kiểm tra stale-branch của `maintain` — ngoài ra là tham số chết. |
+| `include` | Mặc định `**/*` — mọi định dạng SAG nhận, không chỉ markdown (SPEC A3). Thu hẹp nó một cách có chủ đích; thu hẹp `include` là âm thầm quyết định cái gì được coi là tri thức trước khi model kịp được hỏi, và `doctor --unassessed` cũng chỉ quét trong phạm vi đó. |
 | `min_confidence` | Dưới ngưỡng này, verdict `knowledge` sẽ vào hàng đợi chờ người duyệt thay vì auto-publish. |
 | `criteria` | Luật bằng ngôn ngữ tự nhiên cho *model* phán đoán. Nếu có criteria mà assessment không ack cái nào ⇒ đẩy vào queue, không auto. |
 | `deny_paths` | Chặn tất định ở phía engine. Chặn **cả manual mode**. |
@@ -350,6 +359,62 @@ sagctl selftest --url http://<sag-host>:8000 --token <token> --case S17
 ```
 
 Xem [SPEC amendment A2](docs/SPEC.md#a2-agent-side-config-is-generated-from-the-manifest-read-mcp-is-scoped).
+
+---
+
+## Publish không cần file, không cần repo
+
+Trước đây engine hàn cứng hai giới hạn chưa bao giờ thật sự là policy: provenance chỉ
+nhét vừa vào YAML frontmatter nên chỉ markdown publish được; và publish đòi hỏi một commit
+Git nên agent nào không làm việc trong một checkout — một profile Hermes, một phiên
+research — thì không publish được gì cả. Cả hai đều là chi tiết lưu trữ (frontmatter cần
+text; commit cần repo) bị thực thi như thể là luật quyết định cái gì là tri thức. Giờ
+không còn đúng nữa (SPEC amendment A3).
+
+**Mọi định dạng SAG nhận đều publish được.** `include` giờ mặc định `**/*`. Provenance của
+những gì không nhét được frontmatter (`.pdf`, `.docx`, `.csv`, `.json`, ...) nằm trong
+state store thay vì trong file — cùng một nguồn thẩm quyền, cùng chỗ `maintain` và
+`doctor` đã nhìn vào.
+
+**Nhưng PDF/DOCX không được upload thô — mà được chưng cất.** Engine không parse định
+dạng binary; việc đó vẫn thuộc về agent, và Claude Code (cùng nhiều nơi khác) đã có sẵn
+skill đọc tài liệu cho đúng việc này. Đọc tài liệu, viết markdown, publish cái đó:
+
+```bash
+sagctl publish docs/contract-analysis.md --assessment '{"verdict":"knowledge", ...}'
+```
+
+ghi lại bản gốc vào `derived_from` — xem bên dưới. Bản chưng cất chunk tốt hơn hẳn so với
+parse phía server (heading do agent viết, không phải output của `markitdown`), và sàn an
+toàn quét được đầy đủ; một file binary sàn không đọc được thì vào hàng chờ người duyệt,
+không bị âm thầm chứng nhận "sạch".
+
+**Không cần file nào cả — `sagctl publish-content` / MCP tool `sag_publish_content`.**
+Dành cho text agent tự viết: một bản tổng hợp từ phiên chat, một bản chưng cất không đáng
+giữ thành file riêng.
+
+```bash
+sagctl publish-content research/2026-08-01-pricing-competitors.md \
+  --content-file /tmp/synthesis.md \
+  --derived-from "docs/vendor-report.pdf@a1b2c3d,https://example.com/pricing" \
+  --assessment '{"verdict":"knowledge", ...}'
+```
+
+`relpath` (tham số đầu) là key do bạn chọn — được khớp với
+`include`/`exclude`/`deny_paths`/`ask_paths` y hệt như path của file thật, và mã hoá vào
+key SAG theo đúng cách cũ. Không khái niệm policy mới, không trường manifest mới. Không có
+manual-mode bypass ở đây: luôn cần assessment, vì không có file để token của slash command
+gắn vào.
+
+**Manifest vẫn phải resolve được**, chỉ là không cần đi ngược từ một file nữa:
+`--manifest <path>`, `--manifest-name <name>` (tìm dưới
+`~/.sagctl/manifests/<name>.json`), biến môi trường `SAGCTL_MANIFEST`, hoặc một
+`.sag-sync.json` ở trên thư mục hiện tại — bản thân thư mục đó không cần là repo Git.
+
+**Cái không đổi:** sàn an toàn vẫn chạy đủ (secret scan, `deny_paths`, cost cap), model
+vẫn không được tự khai `secret_free`, và orphan/stale-branch detection của `maintain`
+**bỏ qua hẳn** tài liệu publish theo cách này — hỏi "path này còn trong repo không" là vô
+nghĩa, và nguy hiểm, với một tài liệu chưa từng là path thật trong repo nào.
 
 ---
 

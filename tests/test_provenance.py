@@ -41,5 +41,27 @@ class TestProvenance(unittest.TestCase):
         self.assertIn('sag_status: "note: draft"', out)
 
 
+class TestCanCarryFrontmatter(unittest.TestCase):
+    """SPEC A3: which formats get provenance in-band vs. in the state store."""
+
+    def test_markdown_can_carry_frontmatter(self):
+        self.assertTrue(provenance.can_carry_frontmatter("docs/adr/0007.md"))
+        self.assertTrue(provenance.can_carry_frontmatter("notes.markdown"))
+
+    def test_non_markdown_cannot(self):
+        for name in ("report.pdf", "data.json", "sheet.xlsx", "slides.pptx", "contract.docx", "table.csv"):
+            with self.subTest(name=name):
+                self.assertFalse(provenance.can_carry_frontmatter(name))
+
+    def test_case_insensitive(self):
+        self.assertTrue(provenance.can_carry_frontmatter("README.MD"))
+
+    def test_accepts_a_path_object(self):
+        from pathlib import Path
+
+        self.assertTrue(provenance.can_carry_frontmatter(Path("a/b/c.md")))
+        self.assertFalse(provenance.can_carry_frontmatter(Path("a/b/c.pdf")))
+
+
 if __name__ == "__main__":
     unittest.main()

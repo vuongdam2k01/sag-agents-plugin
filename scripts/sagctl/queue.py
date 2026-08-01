@@ -17,7 +17,23 @@ class QueueError(RuntimeError):
     pass
 
 
-def enqueue(source_id: str, *, path: str, key: str, relpath: str, assessment: dict | None, reason: str, agent: str) -> dict:
+def enqueue(
+    source_id: str,
+    *,
+    path: str,
+    key: str,
+    relpath: str,
+    assessment: dict | None,
+    reason: str,
+    agent: str,
+    content: str | None = None,
+    derived_from: list[str] | None = None,
+    manifest_path: str | None = None,
+) -> dict:
+    """`content` is set only for `publish_content()` items (SPEC A3) — there is no
+    file on disk to re-read at approval time, so the text itself has to live in the
+    queue record. `manifest_path` is stored for the same reason: an authored item has
+    no file location to re-resolve the manifest from later."""
     item = {
         "id": secrets.token_hex(8),
         "source_id": source_id,
@@ -29,6 +45,10 @@ def enqueue(source_id: str, *, path: str, key: str, relpath: str, assessment: di
         "agent": agent,
         "status": "pending",
         "created_at": time.time(),
+        "mode": "content" if content is not None else "file",
+        "content": content,
+        "derived_from": list(derived_from or []),
+        "manifest_path": manifest_path,
     }
     state.queue_add(source_id, item)
     audit.append(source_id, {"event": "queued", "queue_id": item["id"], "key": key, "reason": reason, "agent": agent})
@@ -63,13 +83,25 @@ def approve(source_id: str, queue_id: str, *, reviewer: str, wait: bool = False)
     from . import publish as publish_mod
 
     item = _update_status(source_id, queue_id, "approved", reviewer=reviewer)
-    result = publish_mod.publish_one(
-        Path(item["path"]),
-        assessment=item.get("assessment"),
-        agent=item.get("agent", "unknown"),
-        trigger="maintenance",
-        wait=wait,
-    )
+    if item.get("mode") == "content":
+        result = publish_mod.publish_content(
+            item["relpath"],
+            item["content"],
+            assessment=item.get("assessment"),
+            derived_from=item.get("derived_from") or [],
+            manifest_path=Path(item["manifest_path"]) if item.get("manifest_path") else None,
+            agent=item.get("agent", "unknown"),
+            trigger="maintenance",
+            wait=wait,
+        )
+    else:
+        result = publish_mod.publish_one(
+            Path(item["path"]),
+            assessment=item.get("assessment"),
+            agent=item.get("agent", "unknown"),
+            trigger="maintenance",
+            wait=wait,
+        )
     audit.append(
         source_id,
         {

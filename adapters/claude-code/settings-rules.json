@@ -4,6 +4,7 @@
     "allow": [
       "mcp__sag__*",
       "mcp__sagw__sag_publish",
+      "mcp__sagw__sag_publish_content",
       "mcp__sagw__sag_publish_status",
       "mcp__sagw__sag_sync_preview",
       "mcp__sagw__sag_reprocess"

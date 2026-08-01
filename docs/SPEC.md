@@ -188,20 +188,26 @@ published**:
 Inserted **only into the upload bytes**, never modifying the file on disk: `sag_key,
 sag_source_commit, sag_source_blob, sag_published_at, sag_status, sag_route`. Merged
 into existing YAML frontmatter if the file already has one (never creating a second
-`---` block). Every SAG↔repo comparison strips provenance first.
+`---` block). Every SAG↔repo comparison strips provenance first. **⇒ amended by A3** —
+the state store (A1) is now the authoritative home for provenance; in-band frontmatter is
+a convenience copy written only for `.md`/`.markdown`.
 
 ## S4. Deterministic floor (before every upload, no LLM)
 
 ```text
 manifest ancestor is resolvable
 ∧ path matches include ∧ does not match exclude ∧ does not match deny_paths
-∧ git state satisfies require (default: clean porcelain status + has a commit)
-∧ secret scan passes (regex + entropy; gitleaks if present on PATH)
+∧ (no Git repo above the manifest ∨ git state satisfies require)
+∧ secret scan passes and the content was decodable (regex + entropy; gitleaks if present on PATH)
 ∧ dedupe-by-key ∧ cost cap not exceeded
 ```
 
-If any clause is red ⇒ the engine deterministically rejects. `sag_publish_unreviewed`
-bypasses `require` but **does not** bypass the secret scan / `deny_paths`.
+If any clause is red ⇒ the engine deterministically rejects, with one exception: an
+`AUTO`-routed document the scanner could not decode (`UNSCANNABLE`) is downgraded to
+`QUEUE` rather than rejected — a human decides, the engine never claims to have scanned
+what it could not read (A3). `sag_publish_unreviewed` bypasses `require` but **does not**
+bypass the secret scan / `deny_paths`. **⇒ amended by A3** — the git clause applies only
+where a repo exists above the manifest; outside one it is inapplicable, not skipped.
 
 ## S5. Assessment (the contract for the `sag_publish` tool + CLI `--assessment`)
 
@@ -452,6 +458,105 @@ wording above is corrected accordingly rather than left generous:
 
 Re-run `sagctl setup probe --url <URL> --token <TOKEN> --full` on any new instance — this
 result describes `sag.home`, not SAG in general.
+
+### A3. Knowledge is not welded to `.md` files inside a Git repo
+
+**Amends S3** (provenance may live outside the upload bytes), **S4** (the git clause
+applies only where a repo exists), and the `include` default carried in S1's example.
+
+**What was wrong.** Provenance (S3) was inserted into the upload bytes as YAML
+frontmatter, and only markdown can carry that without corruption. Publishing (S4) required
+a Git commit, which only exists inside a repo. Neither restriction was a decision that
+"only committed markdown can be knowledge" — both were storage details (frontmatter needs
+text; a commit needs a repo) that leaked into the rules and were enforced as if they were
+policy:
+
+- SAG accepts `.pdf .docx .pptx .xlsx .csv .json` and more (`GET /system/capabilities`,
+  `allowed_upload_exts`) — the engine accepted none of them. `publish_one()` read every
+  file with `read_text(encoding="utf-8")`, so a PDF raised `UnicodeDecodeError` rather than
+  being handled or cleanly refused.
+- An agent whose working area was not a Git checkout — a Hermes profile, a research
+  session with no repo behind it — could not publish at all: `manifest.load_for()` and
+  `check_git_state()` both assumed one.
+- The secret scanner made it worse, silently: it read every file with
+  `errors="replace"`, so scanning a PDF examined replacement characters and reported
+  "clean" for bytes it had never decoded. A floor check that certifies what it did not
+  inspect is worse than no check, because S4 lets everything downstream trust it.
+
+**The amendment — provenance moves to the state store, Git becomes optional evidence.**
+
+1. **Provenance's authoritative home is the state store** (`state.provenance_put/get`,
+   SPEC A1), keyed by `source_id + key`, written for every publish regardless of format.
+   YAML frontmatter is now a *convenience copy* for markdown — written when
+   `provenance.can_carry_frontmatter(path)` is true (`.md`/`.markdown`), skipped otherwise.
+   A human reading a markdown document straight out of SAG still sees its provenance; a
+   PDF's provenance lives where `maintain` and `doctor` actually look.
+2. **The git clause in `check_floor` is conditional, not mandatory.** `manifest.git_root(m)`
+   returns the Git toplevel above the manifest, or `None` when there is none.
+   `in_git_repo=False` means `check_git_state` is not run at all — not skipped as a
+   favour, simply inapplicable, because there is no commit to check. Every other floor
+   clause (path policy, secret scan, cost cap) still runs unconditionally.
+3. **`include` defaults to `**/*`**, not `**/*.md` — the old default was a consequence of
+   the frontmatter weld, never a content judgement. What counts as knowledge is the
+   assessment's job (S5/S6); `include` is a mechanical boundary, and narrowing it fails
+   silently in both directions (`routing.decide()` rejects before the model is asked, and
+   `doctor --unassessed` only scans within `include`).
+4. **An undecodable file is `UNSCANNABLE`, not banned and not certified.** When a route
+   would be `AUTO` and the floor returns `UNSCANNABLE`, the engine downgrades it to
+   `QUEUE` instead of rejecting outright — a human decides, the engine never claims to
+   have scanned something it could not read. The engine does **not** grow
+   format-specific extraction to work around this: an agent that can read a PDF (Claude
+   Code and others ship document skills for exactly this) should distil it into markdown
+   and publish that instead. The distillation chunks better than a server-side parse
+   (AGENT-BEHAVIOR.md P6) and is fully covered by the floor; the original stays cited via
+   `derived_from`.
+5. **New: `publish_content(relpath, text, ...)` / MCP tool `sag_publish_content`** — the
+   agent hands text directly, no file, no repo. `relpath` is a path-shaped key the caller
+   chooses (e.g. `research/2026-08-01-pricing-competitors.md`); it plays exactly the role
+   a real file's relpath plays — matched against `include`/`exclude`/`deny_paths`/
+   `ask_paths`, encoded into the SAG key by `key_format` — so no new policy concepts and
+   no new manifest fields exist for this path. `derived_from[]` keeps the citation chain:
+   repo paths (ideally `path@blobsha`), URLs, or other SAG keys. Same self-assessment
+   contract (S5), same routing (S6), same floor (S4) minus the inapplicable git clause.
+   There is no manual-mode bypass for this tool — there is no file for a slash command's
+   token to bind to.
+6. **Manifest resolution no longer requires a file to walk up from.**
+   `manifest.resolve()`: explicit path → named manifest
+   (`~/.sagctl/manifests/<name>.json`) → `$SAGCTL_MANIFEST` → walk up from a start
+   directory (which itself does not have to be inside a Git repo — `find_manifest` walks
+   to the filesystem root when no repo is found, not just to a repo boundary). `publish_content`
+   additionally tries the current working directory as its walk-up start. Publishing still
+   **requires** a manifest (S1, unchanged) — what changed is where one is allowed to live.
+7. **`require: "none"` does not exist.** An earlier draft of this amendment added it as a
+   fourth `require` value; that was Mode A pretending to be Mode B — a repo pretending not
+   to need Git instead of the document honestly having none. Superseded by `git_root()`
+   being allowed to return `None` outright. `VALID_REQUIRE` stays `{committed, pushed,
+   merged}`; `canonical_branch` is required by the manifest schema only when `require` is
+   `pushed` or `merged` (it is otherwise inert — consulted only there and by
+   stale-branch detection).
+8. **`maintain` refuses to reconcile what was never in the repo.** Orphan detection
+   (`find_orphans`) and stale-branch detection (`find_stale_branch`) both ask "does this
+   path still exist in the repo?" — meaningless, and actively dangerous, for a document
+   whose key was never a real repo path: `path_exists_at_ref` is unconditionally `False`
+   for such a key, so every authored document would be flagged as orphaned. Both functions
+   now consult `sag_in_git` from the document's provenance record
+   (`maintain._reconcilable`) and skip anything where it is `False`. A document with no
+   state-store record at all predates A1/A3 and is treated as reconcilable, matching prior
+   behavior.
+9. **Queueing an authored document keeps its content, not just its path.**
+   `queue.enqueue()` gains `content`/`derived_from`/`manifest_path`; an item is
+   `mode: "content"` when `content` is set. There is no file on disk to re-read at
+   approval time, so the text has to live in the queue record itself.
+   `queue.approve()` dispatches to `publish_content()` for `mode: "content"` items and to
+   the unchanged `publish_one()` otherwise.
+
+**What did not change.** The deterministic floor still runs on every document. The model
+still cannot assert `secret_free` or `canonical`. A document the engine cannot decode is
+never certified as scanned. `deny_paths` still blocks unconditionally, git repo or not.
+Git, where it exists, still gives the strongest guarantee SAG can offer — commit + blob,
+full reconciliation via `maintain` — and nothing about mirrored publishing (Mode A, in an
+earlier draft's terms) changed. What changed is that Git stops being the *precondition*
+for a document being knowledge, and stops being the only place provenance can live.
 
 ---
 

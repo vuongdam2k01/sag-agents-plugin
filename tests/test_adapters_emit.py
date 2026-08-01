@@ -88,6 +88,19 @@ class TestScopedUrls(unittest.TestCase):
         self.assertIn("mcp__sagw__sag_unpublish", perms["ask"])
         self.assertIn("Bash(sagctl sync*)", perms["deny"])
 
+    def test_sag_publish_content_is_allowed_at_the_same_tier_as_sag_publish(self):
+        """SPEC A3: same assessment + floor pipeline as sag_publish, so the same
+        trust tier — allow, not ask."""
+        files = adapters_emit.emit_files("claude-code", source_id="s")
+        settings = json.loads(next(f for f in files if f.path == ".claude/settings.json").content)
+        self.assertIn("mcp__sagw__sag_publish_content", settings["permissions"]["allow"])
+
+    def test_hermes_profiles_include_sag_publish_content_alongside_sag_publish(self):
+        text = adapters_emit.emit("hermes", source_id="s")
+        for line in text.splitlines():
+            if "include: [sag_publish," in line and "sag_publish_status" in line:
+                self.assertIn("sag_publish_content", line)
+
     def test_files_that_normally_exist_are_marked_merge(self):
         merge_targets = {
             ("claude-code", ".claude/settings.json"),

@@ -15,6 +15,10 @@ from . import gitutil
 
 MANIFEST_FILENAME = ".sag-sync.json"
 
+# Resolution order when there is no file to walk up from — an agent whose working
+# area is not a repo (a Hermes profile, a research session) still has a scope.
+ENV_MANIFEST = "SAGCTL_MANIFEST"
+
 DEFAULTS = {
     "sandbox_source_id": None,
     # "path" | "flat" — LOCKED IN by selftest S1 on sag.home (2026-07-31): SAG
@@ -23,13 +27,21 @@ DEFAULTS = {
     # The "flat" default is a real observed result, not an assumption — see
     # docs/SPEC.md §S2, "Selftest results" section.
     "key_format": "flat",
-    "require": "committed",  # "committed" | "pushed" | "merged"
+    # "committed" | "pushed" | "merged" — applied ONLY when the document lives inside
+    # a Git repo. Outside a repo the git clause does not apply; it is not an error and
+    # not a special mode. Git adds traceability where it exists; it is not the
+    # precondition for a document being knowledge (SPEC A3).
+    "require": "committed",
     "canonical_branch": "main",
     "min_confidence": 0.8,
     "criteria": [],  # [{"id": "...", "text": "..."}] — natural language for the agent's assessment
     "deny_paths": [],  # deterministic rule — engine blocks, including manual
     "ask_paths": [],  # deterministic rule — always goes to queue, manual can satisfy it
-    "include": ["**/*.md"],
+    # Every extension SAG accepts, not just the ones whose bytes can carry YAML
+    # frontmatter. Provenance for the rest lives in the state store (SPEC A3) — the
+    # old `.md`-only default was a consequence of that welding, never a judgement
+    # that only markdown can be knowledge.
+    "include": ["**/*"],
     "exclude": [],
     "max_files": 50,
     "max_publishes_per_day": 30,
@@ -72,6 +84,11 @@ def validate(m: dict) -> None:
         raise ManifestError(f"key_format must be one of {VALID_KEY_FORMATS}, got '{m['key_format']}'")
     if m["require"] not in VALID_REQUIRE:
         raise ManifestError(f"require must be one of {VALID_REQUIRE}, got '{m['require']}'")
+    if m["require"] in ("pushed", "merged") and not m.get("canonical_branch"):
+        # canonical_branch is ONLY consulted by pushed/merged and by maintain's
+        # stale-branch check. Requiring it unconditionally made it look load-bearing
+        # when it is inert under `require: committed|none`.
+        raise ManifestError(f"require='{m['require']}' needs 'canonical_branch'")
     if not isinstance(m["min_confidence"], (int, float)) or not (0 <= m["min_confidence"] <= 1):
         raise ManifestError("min_confidence must be a number in [0, 1]")
     ids = [c.get("id") for c in m["criteria"]]
@@ -103,18 +120,65 @@ def load(path: Path) -> dict:
     return merged
 
 
+def named_manifest(name: str) -> Path:
+    """`~/.sagctl/manifests/<name>.json` — a scope declared outside any working tree."""
+    from . import config
+
+    return config.sagctl_home() / "manifests" / f"{name}.json"
+
+
+def resolve(start: Path | None = None, *, explicit: Path | None = None, name: str | None = None) -> dict:
+    """Find the manifest. A repo is one place it can live, not the only one.
+
+    Order: explicit path -> named manifest -> $SAGCTL_MANIFEST -> walk up from `start`.
+    Publishing still REQUIRES a manifest (S1) — what changed is that the manifest no
+    longer has to sit above a file inside a Git checkout.
+    """
+    if explicit is not None:
+        return load(Path(explicit))
+    if name:
+        path = named_manifest(name)
+        if not path.is_file():
+            raise ManifestError(f"no manifest named '{name}' at {path}")
+        return load(path)
+
+    import os
+
+    env = os.environ.get(ENV_MANIFEST)
+    if env:
+        return load(Path(env))
+
+    if start is not None:
+        manifest_path = find_manifest(start)
+        if manifest_path is not None:
+            return load(manifest_path)
+
+    raise ManifestError(
+        f"no manifest found. Provide one of: --manifest <path>, a named manifest under "
+        f"{named_manifest('<name>').parent}, ${ENV_MANIFEST}, or a {MANIFEST_FILENAME} "
+        f"above the file being published."
+    )
+
+
 def load_for(start: Path) -> dict:
-    manifest_path = find_manifest(start)
-    if manifest_path is None:
-        raise ManifestError(
-            f"could not find {MANIFEST_FILENAME} as an ancestor of {start} — "
-            f"every publish (including manual) requires a manifest (SPEC S1)."
-        )
-    return load(manifest_path)
+    return resolve(start)
 
 
 def repo_root(m: dict) -> Path:
+    """The manifest's directory. Called `repo_root` for history; it is only a Git repo
+    when one happens to be there — see `git_root()`."""
     return Path(m["_repo_root"])
+
+
+def git_root(m: dict) -> Path | None:
+    """The Git toplevel containing the manifest, or None when there is no repo.
+
+    None is a normal state, not a failure: it means the git clause of the floor does
+    not apply and provenance goes to the state store instead of the upload bytes.
+    """
+    from . import gitutil
+
+    return gitutil.toplevel(repo_root(m))
 
 
 def relpath_of(file_path: Path, m: dict) -> str:

@@ -13,6 +13,85 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
 
 ### Added
 
+- **Knowledge is no longer welded to `.md` files inside a Git repo (SPEC amendment A3,
+  amends S3/S4).** Two restrictions turn out to have been storage details enforced as if
+  they were policy: provenance only fit inside YAML frontmatter, so only markdown could be
+  published; publishing required a Git commit, so an agent whose working area was not a
+  checkout — a Hermes profile, a research session — could not publish at all.
+  - **Provenance's authoritative home is now the state store** (`state.provenance_put/get`,
+    SPEC A1), written for every publish regardless of format. Frontmatter becomes a
+    convenience copy for `.md`/`.markdown` (`provenance.can_carry_frontmatter`), not the
+    only place provenance can live.
+  - **The git clause in the floor is conditional, not mandatory.**
+    `manifest.git_root(m)` returns `None` when there is no repo above the manifest;
+    `check_floor(..., in_git_repo=False)` then skips `check_git_state` entirely — not
+    bypassed as a favour, simply inapplicable. Every other floor clause (path policy,
+    secret scan, cost cap) still runs unconditionally.
+  - **`include` now defaults to `**/*`**, every extension SAG accepts, not just markdown.
+    The old `.md`-only default was a side effect of the frontmatter weld, never a
+    judgement that only markdown can be knowledge — narrowing `include` decides what
+    counts as knowledge by glob, which is the assessment's job. Fixed the same drift in
+    `gate.py`, `routing.py`, and `sync.py`, which each hardcoded their own fallback
+    (`sync.py`'s was still the old `**/*.md`) — all three now reference
+    `manifest.DEFAULTS["include"]` as the single source of truth.
+  - **An undecodable file is `UNSCANNABLE`, not silently certified.** The previous secret
+    scanner read every file with `errors="replace"`, so scanning a PDF examined
+    replacement characters and reported "clean" for bytes it never actually read. Now: a
+    file that will not decode as UTF-8 makes the floor return `UNSCANNABLE`; an
+    `AUTO`-routed publish downgrades to `QUEUE` instead of erroring, so a human decides
+    rather than the engine claiming a scan it never performed.
+  - **The engine does not grow a PDF/DOCX parser.** That stays the agent's job — Claude
+    Code and others already ship document skills for it. The intended path: read the
+    artifact, distil it into markdown, publish the distillation (better chunking than a
+    server-side parse, per AGENT-BEHAVIOR.md P6), cite the original via `derived_from`.
+  - **New: `publish_content(relpath, text, ...)` and MCP tool `sag_publish_content`** — an
+    agent hands text directly, no file, no repo. `relpath` is a path-shaped key the caller
+    chooses; it is matched against `include`/`exclude`/`deny_paths`/`ask_paths` and encoded
+    into the SAG key exactly like a real file's relpath — no new policy concepts, no new
+    manifest fields. `derived_from[]` keeps the citation chain (repo paths, URLs, other SAG
+    keys) when this is a distillation. Same self-assessment contract and routing as
+    `sag_publish`; no manual-mode bypass (there is no file for a slash-command token to
+    bind to). New CLI: `sagctl publish-content`.
+  - **Manifest resolution no longer requires a file to walk up from.**
+    `manifest.resolve()`: explicit path → named manifest
+    (`~/.sagctl/manifests/<name>.json`) → `$SAGCTL_MANIFEST` → walk up from a start
+    directory that does not itself have to be inside a Git repo. `publish_content` tries
+    the current working directory as its walk-up start.
+  - **`require: "none"` was removed before shipping.** An earlier draft of this amendment
+    added it as a fourth `require` value; that was Mode A pretending to be Mode B —
+    superseded outright by `git_root()` returning `None`. `VALID_REQUIRE` stays
+    `{committed, pushed, merged}`; `canonical_branch` is required by manifest validation
+    only when `require` is `pushed`/`merged` (previously required unconditionally despite
+    being inert otherwise).
+  - **`maintain` refuses to reconcile documents that were never in the repo.**
+    `find_orphans`/`find_stale_branch` both asked "does this path still exist in the
+    repo?" — meaningless, and actively dangerous, for a document whose key was never a
+    real repo path (`path_exists_at_ref` is unconditionally `False` for such a key, so
+    every authored document would be flagged orphaned). Both now consult the document's
+    `sag_in_git` provenance field (`maintain._reconcilable`) and skip anything where it is
+    `False`. A document with no state-store record predates A1/A3 and is treated as
+    reconcilable, matching prior behavior.
+  - **Queueing an authored document keeps its content, not just a path.**
+    `queue.enqueue()` gains `content`/`derived_from`/`manifest_path`; `queue.approve()`
+    dispatches to `publish_content()` for `mode: "content"` items and to the unchanged
+    `publish_one()` otherwise — there is no file on disk to re-read at approval time, so
+    the text has to live in the queue record itself.
+  - `sag_publish_content` added to the Claude Code allow list (same trust tier as
+    `sag_publish` — identical assessment + floor pipeline) and to every Hermes profile
+    example alongside `sag_publish`.
+  - What did **not** change: the deterministic floor still runs on every document, the
+    model still cannot assert `secret_free`/`canonical`, `deny_paths` still blocks
+    unconditionally, and mirrored Git publishing is untouched — commit + blob, full
+    `maintain` reconciliation, exactly as before. Git stops being the *precondition* for
+    knowledge and the only place provenance can live; it does not stop being the strongest
+    guarantee available when it exists.
+  - 46 new tests: `manifest.resolve()`/`git_root()` resolution order, the conditional git
+    clause, `UNSCANNABLE` vs `SECRET_FOUND` vs clean, `publish_content()`'s reject/queue/
+    floor-failure/auto-publish paths (queue and floor failures proven to never touch the
+    network), `queue.approve()`'s mode-based dispatch, `maintain._reconcilable()`, and a
+    regression lock proving `gate.py`/`routing.py`/`sync.py` agree on the `include`
+    fallback.
+
 - **Fleet-shared state backend (SPEC amendment A1, amends S1).** Audit, queue, and cost
   counters now resolve through `sagctl/state.py` instead of touching `~/.sagctl/` files
   directly. `SAGCTL_STATE_URL` unset keeps the existing local files byte-for-byte — no
