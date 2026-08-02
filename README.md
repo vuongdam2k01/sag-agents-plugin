@@ -162,15 +162,20 @@ The **write token is deliberately not in the agent's environment** — it lives 
 `~/.sagctl/credentials.json` and is read by `sagw`/`sagctl` at call time. See
 [Security model](#security-model).
 
-The plugin registers both MCP servers ([.mcp.json](.mcp.json)), four hooks
-([hooks/hooks.json](hooks/hooks.json)), the `/sag-publish` slash command, and 7 skills.
-Generate the project-scoped MCP config and the permission block from inside the repo:
+The plugin registers four hooks ([hooks/hooks.json](hooks/hooks.json)), the
+`/sag-publish` slash command, and 7 skills. It does **not** ship a plugin-level
+`.mcp.json` — an earlier version did, and it shipped an unscoped read URL
+(`${SAG_URL}/mcp/`, no `source_id`) that every project sharing the plugin would
+silently reach through, on top of running as a second, independently-versioned
+`sagw` server alongside any project-scoped one (found live, 2026-08-02). MCP
+servers are always generated per project, scoped to that project's `source_id`:
 
 ```bash
 sagctl adapter-emit claude-code --write .
 ```
 
-See [adapters/claude-code/](adapters/claude-code/).
+Run this once per repo you want SAG tools in — see
+[adapters/claude-code/](adapters/claude-code/).
 
 ### Hermes Agent
 

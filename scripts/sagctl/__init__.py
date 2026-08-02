@@ -6,7 +6,7 @@ docs/SPEC.md (LOCKED SPEC v1) as the contract — every module here references
 that spec's section numbers S1..S12.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # schema_version for assessment/manifest — bump when the data contract changes (S5, S1).
 CONTRACT_VERSION = "1"

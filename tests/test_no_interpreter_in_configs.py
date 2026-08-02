@@ -26,11 +26,14 @@ _BAD_COMMAND = re.compile(r'"command"\s*:\s*"python3?(\.exe)?"')
 
 
 class TestShippedConfigs(unittest.TestCase):
-    def test_mcp_json_does_not_name_an_interpreter(self):
-        doc = json.loads((REPO / ".mcp.json").read_text(encoding="utf-8"))
-        sagw = doc["mcpServers"]["sagw"]
-        self.assertEqual(sagw["command"], "sagctl")
-        self.assertEqual(sagw["args"], ["serve-mcp"])
+    def test_plugin_root_does_not_ship_an_mcp_json(self):
+        """The plugin used to ship its own root .mcp.json, auto-registered by Claude
+        Code the moment the plugin is enabled — unscoped (no source_id) and a second,
+        independently-versioned `sagw` alongside whatever a project's own adapter-emit
+        output registers (found live, 2026-08-02). MCP config is now generated
+        per-project, always scoped, via `sagctl adapter-emit claude-code --write .` —
+        see TestGeneratedConfigs below."""
+        self.assertFalse((REPO / ".mcp.json").exists())
 
     def test_hooks_json_does_not_name_an_interpreter(self):
         raw = (REPO / "hooks" / "hooks.json").read_text(encoding="utf-8")

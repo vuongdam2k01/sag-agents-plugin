@@ -470,6 +470,17 @@ wording above is corrected accordingly rather than left generous:
 Re-run `sagctl setup probe --url <URL> --token <TOKEN> --full` on any new instance — this
 result describes `sag.home`, not SAG in general.
 
+**Addendum (2026-08-02): the plugin's own root `.mcp.json` closed the loophole this
+amendment left open.** A2 fixed the config `adapter-emit` *generates*, but the plugin
+package itself also shipped a root `.mcp.json` — auto-registered by Claude Code the
+instant the plugin is enabled, independent of any project's own config. That file
+carried the exact unscoped url (`${SAG_URL}/mcp/`, no `source_id`) A2 exists to avoid,
+and registered a second `sagw` write server, independently versioned from whatever a
+project's `adapter-emit --write` output was running (found live: the two drifted 12
+files apart while both reported the same `__version__`, and the unrelated-session Stop
+backstop nag, see the `session_end_backstop.py` fix). The plugin no longer ships a root
+`.mcp.json` — every install path is now `adapter-emit`, always scoped, exactly once.
+
 ### A3. Knowledge is not welded to `.md` files inside a Git repo
 
 **Amends S3** (provenance may live outside the upload bytes), **S4** (the git clause

@@ -162,15 +162,20 @@ export SAG_READ_TOKEN="<token chỉ đọc>"
 `~/.sagctl/credentials.json`, được `sagw`/`sagctl` đọc tại thời điểm gọi. Xem
 [Mô hình bảo mật](#mô-hình-bảo-mật).
 
-Plugin đăng ký cả hai MCP server ([.mcp.json](.mcp.json)), bốn hook
-([hooks/hooks.json](hooks/hooks.json)), slash command `/sag-publish`, và 7 skill. Sinh
-cấu hình MCP có scope theo project cùng khối permission, chạy ngay trong repo:
+Plugin đăng ký bốn hook ([hooks/hooks.json](hooks/hooks.json)), slash command
+`/sag-publish`, và 7 skill. Plugin **không** tự đăng ký `.mcp.json` ở cấp plugin — bản
+trước có, và nó phát ra một URL đọc không scope (`${SAG_URL}/mcp/`, không có
+`source_id`) mà mọi project cùng bật plugin đều âm thầm chạm tới được, đồng thời chạy
+song song một server `sagw` thứ hai, versioned độc lập với bản project-scoped (phát
+hiện thật, 2026-08-02). MCP server luôn được sinh riêng theo từng project, scope theo
+`source_id` của project đó:
 
 ```bash
 sagctl adapter-emit claude-code --write .
 ```
 
-Xem [adapters/claude-code/](adapters/claude-code/).
+Chạy lệnh này một lần cho mỗi repo bạn muốn có SAG tools — xem
+[adapters/claude-code/](adapters/claude-code/).
 
 ### Hermes Agent
 
