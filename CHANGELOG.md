@@ -11,7 +11,66 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-08-02
+
 ### Fixed
+
+- **`doctor.unassessed_files()` (and therefore the Stop/SessionEnd backstop) treated a
+  gitignored file as committed.** Found live on a real deployment (2026-08-02, project
+  `sayitalive`): `git status --porcelain -- <path>` prints nothing both for a clean
+  committed file and for a file excluded by `.gitignore` — the code used "empty porcelain
+  output" as its only proof of "committed", so a file under a `private/.gitignore`
+  containing `*` was reported as an unassessed, publishable document. The backstop then
+  nagged on every `Stop`/`SessionEnd` to publish it, but `gate.check_git_state` — the
+  actual publish floor — always rejected the same file with `NOT_COMMITTED`, an unwinnable
+  loop for any gitignored directory (this is exactly the `private/` pattern SPEC A3's
+  `sag_publish_content` exists for; `sag_publish` was never going to work for it).
+  `unassessed_files()` now additionally requires `gitutil.last_commit_touching(rel)` to
+  return a real commit — the same definition of "committed" `gate.check_git_state` already
+  uses, so the backstop can no longer nag about a file the floor would reject. 3 new tests
+  (`tests/test_doctor.py`).
+- **Plugin cache and marketplace checkout could silently diverge while both reported the
+  same version.** Found live (2026-08-02): Claude Code loads two independent copies of
+  this plugin — the marketplace checkout (`plugins/marketplaces/.../scripts/`) and a
+  versioned cache (`plugins/cache/.../<version>/scripts/`) — registered as two separate
+  MCP servers (`mcp__sagw__*` vs `mcp__plugin_sag-agents_sagw__*`). Because neither
+  `.claude-plugin/plugin.json` nor `scripts/sagctl/__init__.py`'s `__version__` had been
+  bumped across several real fixes, the stale cache kept reporting `0.1.0` even though it
+  had drifted 12 files behind the checkout — including missing the `assessment._REQUIRED_TOP`
+  fix further down in this file, which the checkout had already had for a day. Bumped
+  `plugin.json`, `marketplace.json`, and `sagctl.__version__` to `0.1.1` so a
+  reinstall lands in a fresh, correctly-versioned cache directory instead of silently
+  reusing the stale one. Going forward: bump `__version__` with every `scripts/` change.
+
+- **The Stop/SessionEnd awareness backstop nagged an unrelated session about another
+  session's unpublished files, drowning out its actual task.** Reported live (2026-08-02):
+  a user running two concurrent Claude Code sessions in the same repo — one on unrelated
+  work, one specifically evaluating what to publish to SAG — saw the unrelated session
+  repeatedly interrupted with "these files have never gone through a publish assessment,
+  run the sag-publish skill before finishing." Root cause: `hooks/session_end_backstop.py`
+  called `doctor.unassessed_files()`, which scans **every committed file in the whole repo**
+  matching the manifest, with no notion of which session (or which concurrent agent)
+  produced them — and `Stop` fires after **every single assistant turn** in **every**
+  session working in that repo, not at actual session end despite the name. SPEC §S11
+  already specified the correct scope ("scan `git diff --name-only` since the start of
+  the session ∩ include-globs") — the implementation had drifted from its own locked
+  spec into a full repo-wide scan.
+  - `session_end_backstop.py` now intersects the repo-wide unassessed list with files
+    changed since *this session's own start commit* (`_common.read_session_start_commit`,
+    recorded by the `UserPromptSubmit` hook — infra that already existed for exactly this
+    purpose but was never consulted here). No start marker means nothing can be
+    attributed to this session, so the hook stays silent instead of falling back to the
+    old repo-wide blast.
+  - Added a per-session "already notified" cache so a file surfaced once isn't repeated
+    on every subsequent `Stop` of a long session.
+  - New `gitutil.files_changed_since()` (degrades to `[]` on an unknown/unreachable sha
+    rather than raising).
+  - The full repo-wide backlog is still logged to `unassessed-log.jsonl` for
+    `sagctl doctor` / a later session to read back — only the injection into an
+    unrelated session's live context was the bug.
+  - 7 new tests (`test_gitutil.py`, `test_session_end_backstop.py`), including a direct
+    reproduction of the reported scenario (an unrelated session must not be nudged about
+    a pre-existing backlog it didn't create) and a regression for the per-turn spam.
 
 - **`sag_publish`/`sag_publish_content` required three fields from the model that the
   tool's own schema never offered and the engine never read.** Found live (2026-08-01,
@@ -277,13 +336,25 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
 
 ### Removed
 
+- **The plugin's root `.mcp.json`.** Found live (2026-08-02): the moment the plugin is
+  enabled, Claude Code auto-registered it as a second, independent `sagw` server
+  (`mcp__plugin_sag-agents_sagw__*`) alongside whatever a project's own
+  `adapter-emit --write .` output was already running — and its read url
+  (`${SAG_URL}/mcp/`) carried no `source_id`, exactly the unscoped-read gap SPEC
+  amendment A2 was written to close, which A2 never actually reached because it only
+  ever governed the *generated* config, not this shipped one. The two `sagw` copies
+  also drifted independently versioned (see the `plugin.json`/`__version__` bump above).
+  MCP config is now generated exclusively per project via
+  `sagctl adapter-emit claude-code --write .` — always scoped, never shipped
+  unscoped-by-default. See SPEC A2's 2026-08-02 addendum. Updated: both READMEs,
+  `docs/DESIGN.md`, and `tests/test_no_interpreter_in_configs.py` (asserts the file no
+  longer exists instead of asserting its old contents).
 - `adapters/hermes/config.example.yaml` — superseded by `sagctl adapter-emit hermes`.
   Keeping a static snippet beside a generator that produces the same content is the exact
   drift the generator exists to prevent (REVIEW-OPUS F3). `adapters/claude-code/settings-rules.json`
   stays: the generator *reads* it, so it is a source of truth rather than a second copy.
 
 ## [0.1.0] — 2026-07-31
-
 First working implementation of the locked spec (SPEC v1).
 
 ### Added
