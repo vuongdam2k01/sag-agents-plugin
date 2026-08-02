@@ -107,3 +107,16 @@ def last_commit_touching(relpath: str, repo_root: Path) -> str | None:
     result = _run(["log", "-1", "--format=%H", "--", relpath], cwd=repo_root, check=False)
     out = result.stdout.strip()
     return out or None
+
+
+def files_changed_since(sha: str, repo_root: Path) -> list[str]:
+    """Committed files touched between `sha` and HEAD (relpaths, POSIX). Returns
+    [] if `sha` is unknown to this clone rather than raising — a stale or
+    unreachable marker should degrade to "nothing attributable", not crash the
+    caller."""
+    if not commit_exists(sha, repo_root):
+        return []
+    result = _run(["diff", "--name-only", f"{sha}..HEAD"], cwd=repo_root, check=False)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
