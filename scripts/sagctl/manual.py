@@ -43,9 +43,19 @@ def mint(args_str: str, token: str) -> dict:
         "minted_at": time.time(),
         "expires_at": time.time() + TOKEN_TTL_SECONDS,
     }
-    path = config.session_dir() / f"{token}.json"
+    path = _token_path(token)
     path.write_text(json.dumps(rec), encoding="utf-8")
     return rec
+
+
+def _token_path(token: str):
+    # `token-` prefixed, not bare `{token}.json` — config.session_dir() is shared
+    # scratch space for other hooks too (post_tool_use_nudge's per-session nudge
+    # cache, session_end_backstop's per-session notified cache), which also write
+    # `*.json` there but hold a list, not a token record. cleanup_expired() globs
+    # this directory; without the prefix it can pick up one of those files and
+    # crash on `.get()` (found live, 2026-08-02, via `sagctl doctor`).
+    return config.session_dir() / f"token-{token}.json"
 
 
 def consume(token: str, args_str: str) -> bool:
@@ -53,7 +63,7 @@ def consume(token: str, args_str: str) -> bool:
     the token is used exactly once whether it succeeds or fails, preventing
     brute-force retries against the same token.
     """
-    path = config.session_dir() / f"{token}.json"
+    path = _token_path(token)
     if not path.exists():
         return False
     try:
@@ -73,7 +83,7 @@ def cleanup_expired() -> int:
     """Clean up leftover expired tokens (crashed before being consumed). Called from `sagctl doctor`."""
     removed = 0
     now = time.time()
-    for path in config.session_dir().glob("*.json"):
+    for path in config.session_dir().glob("token-*.json"):
         try:
             rec = json.loads(path.read_text(encoding="utf-8"))
             if now > rec.get("expires_at", 0):

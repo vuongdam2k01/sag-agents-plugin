@@ -7,14 +7,14 @@
   },
   "metadata": {
     "description": "Marketplace hosting the sag-agents plugin — SAG as a shared, writable knowledge base for AI coding agents.",
-    "version": "0.1.1"
+    "version": "0.1.2"
   },
   "plugins": [
     {
       "name": "sag-agents",
       "source": "./",
       "description": "SAG knowledge base integration — 8 read tools via SAG's built-in MCP, plus 6 write tools (sagw) + the sagctl CLI for publish/unpublish/reprocess/sync/maintain. Does not modify SAG source code — all operations go through the public REST API.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "vuongdam2k01"
       },

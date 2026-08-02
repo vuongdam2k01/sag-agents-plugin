@@ -42,7 +42,7 @@ class TestManualToken(unittest.TestCase):
         import time
 
         manual.mint("docs/x.md", "tok1")
-        path = config.session_dir() / "tok1.json"
+        path = config.session_dir() / "token-tok1.json"
         import json
 
         rec = json.loads(path.read_text(encoding="utf-8"))
@@ -55,13 +55,35 @@ class TestManualToken(unittest.TestCase):
         import json
 
         manual.mint("docs/x.md", "tok1")
-        path = config.session_dir() / "tok1.json"
+        path = config.session_dir() / "token-tok1.json"
         rec = json.loads(path.read_text(encoding="utf-8"))
         rec["expires_at"] = time.time() - 1
         path.write_text(json.dumps(rec), encoding="utf-8")
         removed = manual.cleanup_expired()
         self.assertEqual(removed, 1)
         self.assertFalse(path.exists())
+
+    def test_cleanup_expired_ignores_other_hooks_json_caches(self):
+        """Crashed live, 2026-08-02, via `sagctl doctor`: session_dir() is shared
+        scratch space for the post_tool_use_nudge/session_end_backstop hooks too,
+        which write their own `*.json` caches there holding a *list*, not a token
+        record — cleanup_expired()'s glob used to pick those up and crash on
+        `.get()`. It must now leave them alone (and still do its real job)."""
+        import json
+
+        (config.session_dir() / "sess123-nudged.json").write_text(
+            json.dumps(["docs/a.md"]), encoding="utf-8"
+        )
+        (config.session_dir() / "sess123-backstop-notified.json").write_text(
+            json.dumps(["docs/b.md"]), encoding="utf-8"
+        )
+        manual.mint("docs/x.md", "tok1")
+
+        removed = manual.cleanup_expired()
+
+        self.assertEqual(removed, 0)  # the one real token isn't expired yet
+        self.assertTrue((config.session_dir() / "sess123-nudged.json").exists())
+        self.assertTrue((config.session_dir() / "sess123-backstop-notified.json").exists())
 
 
 if __name__ == "__main__":

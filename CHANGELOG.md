@@ -11,6 +11,27 @@ behavior cite the spec section they touch (S1–S12) or the amendment that revis
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-08-02
+
+### Fixed
+
+- **`sagctl doctor --source-id` crashed with `AttributeError: 'list' object has no
+  attribute 'get'`.** Found live immediately after deploying 0.1.1 (first real exercise
+  of `doctor.health_report()` → `manual.cleanup_expired()` on a host that also had hook
+  state on disk). `cleanup_expired()` globbed every `*.json` file under
+  `config.session_dir()` and assumed each one was a manual-token record (a dict with
+  `expires_at`) — but that directory is shared scratch space for other hooks too:
+  `post_tool_use_nudge`'s per-session nudge cache and `session_end_backstop`'s
+  per-session notified cache (added in 0.1.1) both write their own `*.json` files there
+  holding a **list**, not a dict. The first one `cleanup_expired()` happened to glob hit
+  `.get()` on a list and crashed the whole `doctor` command.
+  - Token files are now named `token-<token>.json` (was bare `<token>.json`) and
+    `cleanup_expired()` globs `token-*.json` specifically, so it can never pick up a
+    same-directory file that belongs to a different hook.
+  - 1 new regression test reproducing the exact crash (a nudge cache and a backstop
+    cache present alongside a real token) plus the two existing token-path tests
+    updated for the new filename.
+
 ## [0.1.1] — 2026-08-02
 
 ### Fixed
