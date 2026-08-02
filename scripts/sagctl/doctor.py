@@ -40,6 +40,14 @@ def unassessed_files(manifest_path: Path, *, since_ref: str | None = None) -> li
             status = gitutil.status_porcelain_for(rel, repo_root)
             if status.strip():
                 continue  # not committed -- not yet eligible, doesn't count as "missed"
+            if gitutil.last_commit_touching(rel, repo_root) is None:
+                # An empty porcelain status does NOT prove the file is tracked:
+                # `git status --porcelain` stays silent for a gitignored path too, so a
+                # gitignored file looks exactly like a clean committed one here (found
+                # live, 2026-08-02). Ask git for a commit instead — the same definition
+                # of "committed" gate.check_git_state uses — so this backstop can never
+                # nag about a file the publish floor would reject as NOT_COMMITTED.
+                continue
             if rel not in audited_relpaths:
                 unassessed.append(rel)
     return sorted(unassessed)
